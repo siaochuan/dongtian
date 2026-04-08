@@ -1,5 +1,7 @@
 # Dongtian
 
+[中文文档](README_CN.md)
+
 **A single SQLite file holds your entire AI memory. No ChromaDB. No heavy models. ~1,200 lines of Python.**
 
 > *Dongtian* is a Daoist concept meaning "grotto-heaven" -- a small sacred space that contains an entire world within. Your conversations deserve the same: a compact local database that holds everything you've ever discussed with AI, structured and instantly searchable.
