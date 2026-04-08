@@ -7,8 +7,9 @@ from mcp.server.fastmcp import FastMCP
 from .config import load_config
 from . import db as dbmod
 from .search import search as do_search
-from .ingest import ingest_source as do_ingest, ingest_claude_project as do_ingest_project, ingest_codex_sessions as do_ingest_codex
+from .ingest import ingest_source as do_ingest, ingest_claude_project as do_ingest_project, ingest_codex_sessions as do_ingest_codex, ingest_opencode_db as do_ingest_opencode
 from .graph import extract_and_store
+from .remote import sync_remote_host, sync_all_hosts, discover_remote_sessions
 
 mcp = FastMCP("dongtian", instructions="Dongtian: structured memory system for AI conversations")
 
@@ -140,6 +141,17 @@ def ingest_codex_sessions(sessions_dir: str, wing: str) -> dict:
     return do_ingest_codex(_get_conn(), _get_config(), sessions_dir, wing)
 
 
+@mcp.tool()
+def ingest_opencode(db_path: str, wing: str) -> dict:
+    """Ingest all sessions from an OpenCode (DeepSeek) SQLite database.
+
+    Args:
+        db_path: Path to opencode.db (e.g. ~/.local/share/opencode/opencode.db)
+        wing: Wing name for all ingested sessions
+    """
+    return do_ingest_opencode(_get_conn(), _get_config(), db_path, wing)
+
+
 # ── Knowledge graph tools ──
 
 @mcp.tool()
@@ -190,3 +202,41 @@ def extract_knowledge(drawer_id: int) -> dict:
         drawer_id: ID of the drawer to analyze
     """
     return extract_and_store(_get_conn(), drawer_id)
+
+
+# ── Remote sync tools ──
+
+@mcp.tool()
+def sync_remote(host: str, wing: str = "") -> dict:
+    """Pull session data from a remote machine via SSH and ingest into the palace.
+
+    Automatically discovers Claude Code and Codex sessions on the remote host,
+    rsync-pulls them, and ingests into a wing named after the host.
+
+    Args:
+        host: SSH host string (e.g. "konghm@192.168.91.212", "renchuan-01")
+        wing: Optional wing name override (default: auto from hostname)
+    """
+    return sync_remote_host(
+        _get_conn(), _get_config(), host,
+        wing_name=wing or None,
+    )
+
+
+@mcp.tool()
+def sync_all_remotes() -> dict:
+    """Sync session data from all configured remote hosts.
+
+    Reads host list from remote_hosts in ~/.dongtian/config.json.
+    """
+    return sync_all_hosts(_get_conn(), _get_config())
+
+
+@mcp.tool()
+def discover_remote(host: str) -> dict:
+    """Check what session data exists on a remote host without pulling.
+
+    Args:
+        host: SSH host string
+    """
+    return discover_remote_sessions(host)

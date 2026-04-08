@@ -15,12 +15,14 @@ DEFAULT_CONFIG = {
 }
 
 CONFIG_PATH = Path("~/.dongtian/config.json").expanduser()
+_ALT_CONFIG_PATH = Path("~/.mempalace/config.json").expanduser()
 
 
 def load_config() -> dict:
     config = dict(DEFAULT_CONFIG)
-    if CONFIG_PATH.exists():
-        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+    cfg_path = CONFIG_PATH if CONFIG_PATH.exists() else _ALT_CONFIG_PATH
+    if cfg_path.exists():
+        with open(cfg_path, "r", encoding="utf-8") as f:
             user_config = json.load(f)
         config.update(user_config)
     # env overrides

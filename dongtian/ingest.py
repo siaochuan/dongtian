@@ -340,6 +340,206 @@ def ingest_codex_sessions(
     return {"sessions": sessions, "drawers": total}
 
 
+# ── OpenCode (DeepSeek) SQLite parser ──
+
+def parse_opencode_db(path: str) -> Generator[Chunk, None, None]:
+    """Parse an OpenCode SQLite database (opencode.db) into chunks.
+
+    OpenCode stores sessions in SQLite with tables: session, message, part.
+    Messages have role (user/assistant), parts have type (text/tool/step-*).
+    """
+    import sqlite3 as _sqlite3
+
+    conn = _sqlite3.connect(path)
+    conn.row_factory = _sqlite3.Row
+
+    sessions = conn.execute(
+        "SELECT id, title, time_created FROM session ORDER BY time_created"
+    ).fetchall()
+
+    for sess in sessions:
+        sid = sess["id"]
+        title = sess["title"] or sid[:12]
+        sess_ts = ""
+        if sess["time_created"]:
+            try:
+                sess_ts = datetime.fromtimestamp(
+                    sess["time_created"] / 1000, tz=timezone.utc
+                ).isoformat()
+            except (ValueError, OSError):
+                pass
+
+        messages = conn.execute(
+            "SELECT id, data, time_created FROM message WHERE session_id=? ORDER BY time_created",
+            (sid,),
+        ).fetchall()
+
+        exchanges: list[tuple[str, str, str]] = []
+        for msg in messages:
+            try:
+                mdata = json.loads(msg["data"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            role = mdata.get("role", "")
+            msg_ts = sess_ts
+            if msg["time_created"]:
+                try:
+                    msg_ts = datetime.fromtimestamp(
+                        msg["time_created"] / 1000, tz=timezone.utc
+                    ).isoformat()
+                except (ValueError, OSError):
+                    pass
+
+            # Collect text parts for this message
+            parts = conn.execute(
+                "SELECT data FROM part WHERE message_id=? ORDER BY time_created",
+                (msg["id"],),
+            ).fetchall()
+
+            text_parts = []
+            for p in parts:
+                try:
+                    pdata = json.loads(p["data"])
+                except (json.JSONDecodeError, TypeError):
+                    continue
+                if pdata.get("type") == "text" and pdata.get("text"):
+                    text_parts.append(pdata["text"])
+
+            content = "\n".join(text_parts).strip()
+            if content and role in ("user", "assistant"):
+                exchanges.append((role, content, msg_ts))
+
+        # Pair user+assistant turns
+        i = 0
+        while i < len(exchanges):
+            turn_parts = []
+            ts = exchanges[i][2]
+            if exchanges[i][0] == "user":
+                turn_parts.append(f"User: {exchanges[i][1]}")
+                i += 1
+                if i < len(exchanges) and exchanges[i][0] == "assistant":
+                    turn_parts.append(f"Assistant: {exchanges[i][1]}")
+                    i += 1
+            else:
+                turn_parts.append(f"Assistant: {exchanges[i][1]}")
+                i += 1
+
+            combined = "\n\n".join(turn_parts)
+            for chunk in _split_long(combined):
+                yield chunk, f"opencode:{title[:30]}", ts
+
+    conn.close()
+
+
+def ingest_opencode_db(
+    conn: sqlite3.Connection,
+    config: dict,
+    db_path: str,
+    wing_name: str,
+) -> dict:
+    """Ingest all sessions from an OpenCode SQLite database.
+
+    Args:
+        conn: Dongtian palace connection
+        config: Dongtian config
+        db_path: Path to opencode.db
+        wing_name: Wing name for ingested data
+    """
+    import sqlite3 as _sqlite3
+
+    oc_conn = _sqlite3.connect(db_path)
+    oc_conn.row_factory = _sqlite3.Row
+
+    sessions = oc_conn.execute(
+        "SELECT id, title, time_created FROM session ORDER BY time_created"
+    ).fetchall()
+
+    total = 0
+    sess_count = 0
+    for sess in sessions:
+        title = (sess["title"] or sess["id"])[:40]
+        # Use title slug as room name
+        room_name = title.replace(" ", "-").replace("/", "-")[:30]
+
+        wing_id = dbmod.get_or_create_wing(conn, wing_name)
+        room_id = dbmod.get_or_create_room(conn, wing_id, room_name)
+
+        drawer_ids = []
+        for content, source_label, ts in _opencode_session_chunks(oc_conn, sess["id"], title):
+            did = dbmod.insert_drawer(conn, room_id, content, source_label, ts)
+            drawer_ids.append(did)
+
+        _embed_drawers(conn, config, drawer_ids)
+        total += len(drawer_ids)
+        if drawer_ids:
+            sess_count += 1
+
+    oc_conn.close()
+    return {"sessions": sess_count, "drawers": total}
+
+
+def _opencode_session_chunks(
+    oc_conn, session_id: str, title: str
+) -> Generator[Chunk, None, None]:
+    """Yield chunks from a single OpenCode session."""
+    messages = oc_conn.execute(
+        "SELECT id, data, time_created FROM message WHERE session_id=? ORDER BY time_created",
+        (session_id,),
+    ).fetchall()
+
+    exchanges: list[tuple[str, str, str]] = []
+    for msg in messages:
+        try:
+            mdata = json.loads(msg["data"])
+        except (json.JSONDecodeError, TypeError):
+            continue
+        role = mdata.get("role", "")
+        msg_ts = ""
+        if msg["time_created"]:
+            try:
+                msg_ts = datetime.fromtimestamp(
+                    msg["time_created"] / 1000, tz=timezone.utc
+                ).isoformat()
+            except (ValueError, OSError):
+                pass
+
+        parts_rows = oc_conn.execute(
+            "SELECT data FROM part WHERE message_id=? ORDER BY time_created",
+            (msg["id"],),
+        ).fetchall()
+
+        text_parts = []
+        for p in parts_rows:
+            try:
+                pdata = json.loads(p["data"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            if pdata.get("type") == "text" and pdata.get("text"):
+                text_parts.append(pdata["text"])
+
+        content = "\n".join(text_parts).strip()
+        if content and role in ("user", "assistant"):
+            exchanges.append((role, content, msg_ts))
+
+    i = 0
+    while i < len(exchanges):
+        turn_parts = []
+        ts = exchanges[i][2]
+        if exchanges[i][0] == "user":
+            turn_parts.append(f"User: {exchanges[i][1]}")
+            i += 1
+            if i < len(exchanges) and exchanges[i][0] == "assistant":
+                turn_parts.append(f"Assistant: {exchanges[i][1]}")
+                i += 1
+        else:
+            turn_parts.append(f"Assistant: {exchanges[i][1]}")
+            i += 1
+
+        combined = "\n\n".join(turn_parts)
+        for chunk in _split_long(combined):
+            yield chunk, f"opencode:{title[:30]}", ts
+
+
 # ── Ingest orchestrator ──
 
 PARSERS = {
@@ -348,6 +548,7 @@ PARSERS = {
     "slack": parse_slack_json,
     "text": parse_text,
     "codex": parse_codex_rollout,
+    "opencode": parse_opencode_db,
 }
 
 
