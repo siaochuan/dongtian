@@ -1,4 +1,4 @@
-"""Remote SSH sync — pull session data from other machines into the palace."""
+"""Remote SSH sync — pull session data from other machines into the cavern."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Optional
 
 from . import db as dbmod
-from .ingest import ingest_source, ingest_claude_project, ingest_opencode_db, _embed_drawers
+from .ingest import ingest_source, ingest_claude_project, ingest_opencode_db, _embed_strata
 from .embeddings import get_client
 
 log = logging.getLogger(__name__)
@@ -77,14 +77,14 @@ def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode()).hexdigest()[:16]
 
 
-def _get_synced_hashes(conn, wing_name: str) -> set[str]:
-    """Get set of content hashes already in a wing to skip duplicates."""
+def _get_synced_hashes(conn, layer_name: str) -> set[str]:
+    """Get set of content hashes already in a layer to skip duplicates."""
     rows = conn.execute("""
-        SELECT d.metadata FROM drawers d
-        JOIN rooms r ON d.room_id = r.id
-        JOIN wings w ON r.wing_id = w.id
+        SELECT d.metadata FROM strata d
+        JOIN chambers r ON d.chamber_id = r.id
+        JOIN layers w ON r.layer_id = w.id
         WHERE w.name = ? AND d.metadata LIKE '%sync_hash%'
-    """, (wing_name,)).fetchall()
+    """, (layer_name,)).fetchall()
     hashes = set()
     for row in rows:
         try:
@@ -121,16 +121,16 @@ def sync_remote_host(
     conn,
     config: dict,
     host: str,
-    wing_name: Optional[str] = None,
+    layer_name: Optional[str] = None,
     source_types: Optional[list[str]] = None,
 ) -> dict:
-    """Sync session data from a remote host into the local palace.
+    """Sync session data from a remote host into the local cavern.
 
     Args:
         conn: SQLite connection
         config: Dongtian config dict
-        host: SSH host (e.g. "konghm@192.168.91.212" or SSH alias)
-        wing_name: Wing name override (default: host short name)
+        host: SSH host (e.g. "user@192.168.1.50" or SSH alias)
+        layer_name: Layer name override (default: host short name)
         source_types: Which types to sync (default: all available)
 
     Returns dict with sync stats.
@@ -138,18 +138,18 @@ def sync_remote_host(
     if not _ssh_check(host):
         return {"error": f"Cannot reach {host} via SSH", "host": host}
 
-    # Derive wing name from host
-    if not wing_name:
+    # Derive layer name from host
+    if not layer_name:
         # "konghm@192.168.91.212" → "212", "renchuan-01" → "renchuan-01"
         h = host.split("@")[-1]
         if h.replace(".", "").isdigit():
-            wing_name = h.split(".")[-1]
+            layer_name = h.split(".")[-1]
         else:
-            wing_name = h
-        wing_name = f"remote-{wing_name}"
+            layer_name = h
+        layer_name = f"remote-{layer_name}"
 
     types_to_sync = source_types or list(_REMOTE_PATHS.keys())
-    stats = {"host": host, "wing": wing_name, "synced": {}}
+    stats = {"host": host, "layer": layer_name, "synced": {}}
 
     with tempfile.TemporaryDirectory(prefix="dongtian-sync-") as tmpdir:
         for src_type in types_to_sync:
@@ -189,25 +189,25 @@ def sync_remote_host(
 
             # Ingest pulled data
             if src_type == "claude":
-                count = _ingest_pulled_claude(conn, config, local_pull, wing_name)
+                count = _ingest_pulled_claude(conn, config, local_pull, layer_name)
             elif src_type == "codex":
-                count = _ingest_pulled_codex(conn, config, local_pull, wing_name)
+                count = _ingest_pulled_codex(conn, config, local_pull, layer_name)
             elif src_type == "opencode":
                 db_file = local_pull / "opencode.db"
                 if db_file.exists():
-                    result = ingest_opencode_db(conn, config, str(db_file), wing_name)
-                    count = result.get("drawers", 0)
+                    result = ingest_opencode_db(conn, config, str(db_file), layer_name)
+                    count = result.get("strata", 0)
                 else:
                     count = 0
             else:
                 count = 0
 
-            stats["synced"][src_type] = {"drawers": count}
+            stats["synced"][src_type] = {"strata": count}
 
     return stats
 
 
-def _ingest_pulled_claude(conn, config: dict, local_dir: Path, wing_name: str) -> int:
+def _ingest_pulled_claude(conn, config: dict, local_dir: Path, layer_name: str) -> int:
     """Ingest Claude project dirs pulled from a remote host."""
     total = 0
     # Claude projects dir contains subdirs per project, each with .jsonl files
@@ -216,24 +216,24 @@ def _ingest_pulled_claude(conn, config: dict, local_dir: Path, wing_name: str) -
             continue
         jsonl_files = sorted(project_dir.glob("*.jsonl"))
         for jf in jsonl_files:
-            room_name = jf.stem[:12]
+            chamber_name = jf.stem[:12]
             try:
-                count = ingest_source(conn, config, str(jf), "claude", wing_name, room_name)
+                count = ingest_source(conn, config, str(jf), "claude", layer_name, chamber_name)
                 total += count
             except Exception as e:
                 log.warning("Failed to ingest %s: %s", jf, e)
     return total
 
 
-def _ingest_pulled_codex(conn, config: dict, local_dir: Path, wing_name: str) -> int:
+def _ingest_pulled_codex(conn, config: dict, local_dir: Path, layer_name: str) -> int:
     """Ingest Codex session files pulled from a remote host."""
     total = 0
     # Codex sessions may be nested: sessions/2026/03/24/rollout-*.jsonl
     for jf in sorted(local_dir.rglob("rollout-*.jsonl")):
         stem = jf.stem
-        room_name = stem[8:18] if stem.startswith("rollout-") and len(stem) > 18 else stem[:12]
+        chamber_name = stem[8:18] if stem.startswith("rollout-") and len(stem) > 18 else stem[:12]
         try:
-            count = ingest_source(conn, config, str(jf), "codex", wing_name, room_name)
+            count = ingest_source(conn, config, str(jf), "codex", layer_name, chamber_name)
             total += count
         except Exception as e:
             log.warning("Failed to ingest %s: %s", jf, e)
@@ -252,14 +252,14 @@ def sync_all_hosts(conn, config: dict) -> dict:
     results = {}
     for entry in hosts:
         if isinstance(entry, str):
-            host, wing = entry, None
+            host, layer = entry, None
         elif isinstance(entry, dict):
             host = entry["host"]
-            wing = entry.get("wing")
+            layer = entry.get("wing") or entry.get("layer")
         else:
             continue
 
         log.info("Syncing from %s ...", host)
-        results[host] = sync_remote_host(conn, config, host, wing_name=wing)
+        results[host] = sync_remote_host(conn, config, host, layer_name=layer)
 
     return results

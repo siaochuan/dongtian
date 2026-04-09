@@ -1,4 +1,4 @@
-"""Dual-mode search: FTS5 + DeepSeek embedding with hybrid ranking."""
+"""Dual-mode search: FTS5 + embedding with hybrid ranking."""
 
 import sqlite3
 from typing import Optional
@@ -16,39 +16,38 @@ def search(
     conn: sqlite3.Connection,
     query: str,
     config: dict,
-    wing: Optional[str] = None,
-    room: Optional[str] = None,
+    layer: Optional[str] = None,
+    chamber: Optional[str] = None,
     mode: str = "hybrid",
     limit: int = 10,
 ) -> list[dict]:
     embedding_client = get_client(config)
 
     if mode == "keyword" or (mode == "hybrid" and embedding_client is None):
-        return _search_fts(conn, query, wing, room, limit)
+        return _search_fts(conn, query, layer, chamber, limit)
 
     if mode == "embedding":
         if embedding_client is None:
-            return _search_fts(conn, query, wing, room, limit)
-        return _search_embedding(conn, query, embedding_client, wing, room, limit)
+            return _search_fts(conn, query, layer, chamber, limit)
+        return _search_embedding(conn, query, embedding_client, layer, chamber, limit)
 
     # hybrid
-    fts_results = _search_fts(conn, query, wing, room, limit * 2)
-    emb_results = _search_embedding(conn, query, embedding_client, wing, room, limit * 2)
+    fts_results = _search_fts(conn, query, layer, chamber, limit * 2)
+    emb_results = _search_embedding(conn, query, embedding_client, layer, chamber, limit * 2)
     return _merge_results(fts_results, emb_results, limit)
 
 
 def _search_fts(
     conn: sqlite3.Connection,
     query: str,
-    wing: Optional[str],
-    room: Optional[str],
+    layer: Optional[str],
+    chamber: Optional[str],
     limit: int,
 ) -> list[dict]:
     try:
-        results = dbmod.search_fts(conn, query, wing, room, limit)
+        results = dbmod.search_fts(conn, query, layer, chamber, limit)
     except Exception:
         return []
-    # bm25 returns negative (more negative = better), normalize to 0-1
     if not results:
         return []
     scores = [-r["score"] for r in results]
@@ -65,12 +64,12 @@ def _search_embedding(
     conn: sqlite3.Connection,
     query: str,
     client,
-    wing: Optional[str],
-    room: Optional[str],
+    layer: Optional[str],
+    chamber: Optional[str],
     limit: int,
 ) -> list[dict]:
     query_vec = client.embed_one(query)
-    rows = dbmod.get_drawers_with_embeddings(conn, wing, room)
+    rows = dbmod.get_strata_with_embeddings(conn, layer, chamber)
     if not rows:
         return []
     scored = []
