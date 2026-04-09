@@ -56,11 +56,9 @@ def parse_claude_jsonl(path: str) -> Generator[Chunk, None, None]:
                 continue
 
             role = entry.get("type", "")
-            ts = entry.get("timestamp", "")
-            if isinstance(ts, (int, float)):
-                ts = datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat()
+            ts = _normalize_timestamp(entry.get("timestamp", ""))
 
-            if role == "human":
+            if role in ("human", "user"):
                 content = _extract_human_content(entry)
                 if content:
                     exchanges.append(("user", content, ts))
@@ -68,6 +66,17 @@ def parse_claude_jsonl(path: str) -> Generator[Chunk, None, None]:
                 content = _extract_assistant_content(entry)
                 if content:
                     exchanges.append(("assistant", content, ts))
+            else:
+                message = entry.get("message", {})
+                message_role = message.get("role", "")
+                if message_role == "user":
+                    content = _extract_human_content(entry)
+                    if content:
+                        exchanges.append(("user", content, ts))
+                elif message_role == "assistant":
+                    content = _extract_assistant_content(entry)
+                    if content:
+                        exchanges.append(("assistant", content, ts))
 
     # pair user+assistant turns
     i = 0
@@ -118,6 +127,12 @@ def _extract_assistant_content(entry: dict) -> str:
                 # skip thinking, tool_use, tool_result
         return "\n".join(texts).strip()
     return ""
+
+
+def _normalize_timestamp(ts: str | int | float) -> str:
+    if isinstance(ts, (int, float)):
+        return datetime.fromtimestamp(ts / 1000, tz=timezone.utc).isoformat()
+    return ts
 
 
 # ── ChatGPT JSON parser ──
@@ -784,14 +799,19 @@ def ingest_claude_project(
     layer_name: str,
 ) -> dict:
     p = Path(project_path)
-    jsonl_files = sorted(p.glob("*.jsonl"))
+    jsonl_files = sorted(p.rglob("*.jsonl"))
     total = 0
     sessions = 0
     for jf in jsonl_files:
-        chamber_name = jf.stem[:12]
+        rel_stem = jf.relative_to(p).with_suffix("")
+        if len(rel_stem.parts) == 1:
+            chamber_name = jf.stem[:12]
+        else:
+            chamber_name = "__".join(part[:24] for part in rel_stem.parts)[:120]
         count = ingest_source(conn, config, str(jf), "claude", layer_name, chamber_name)
         total += count
-        sessions += 1
+        if count > 0:
+            sessions += 1
     return {"sessions": sessions, "strata": total}
 
 
