@@ -26,7 +26,7 @@ You use multiple AI tools — Claude Code for architecture, Codex for prototypin
 | **Storage** | SQLite (single file) | Cloud / Qdrant / pgvector | SQLite + ChromaDB | SQLite | JSON file |
 | **Search** | FTS5 BM25 + embedding hybrid | Semantic + graph | RAG | FTS5 only | Keyword only |
 | **Multi-source ingestion** | Claude, Codex, ChatGPT, OpenCode, Slack, text | No (API-driven) | Claude only | No | No |
-| **Knowledge graph** | Yes | No | No | No | Yes |
+| **Cave survey (KG)** | Yes | No | No | No | Yes |
 | **SSH remote sync** | Yes | No | No | No | No |
 | **Dependencies** | `httpx` + `mcp` | Qdrant + LLM API | ChromaDB + transformers | None (Go binary) | None |
 | **MCP server** | Native | Via wrapper | No (hooks) | Native | Native |
@@ -37,26 +37,26 @@ You use multiple AI tools — Claude Code for architecture, Codex for prototypin
 
 ## Architecture
 
-Dongtian organizes memory using the palace metaphor, mapped to a simple relational schema:
+Dongtian organizes memory as a **cave system**, mapped to a simple relational schema:
 
 ```
-  Palace (SQLite DB)
+  Cavern (SQLite DB)
     |
-    +-- Wing: "claude-local"           # top-level domain
-    |     +-- Room: "2026-03-19"       # session / topic
-    |     |     +-- Drawer: "User asked about deployment config..."
-    |     |     +-- Drawer: "Assistant explained the architecture..."
-    |     +-- Room: "2026-04-01"
-    |           +-- Drawer: ...
+    +-- Layer: "claude-local"            # top-level grouping
+    |     +-- Chamber: "2026-03-19"      # session / topic
+    |     |     +-- Stratum: "User asked about deployment config..."
+    |     |     +-- Stratum: "Assistant explained the architecture..."
+    |     +-- Chamber: "2026-04-01"
+    |           +-- Stratum: ...
     |
-    +-- Wing: "chatgpt-export"
-    |     +-- Room: "project-planning"
-    |           +-- Drawer: ...
+    +-- Layer: "chatgpt-export"
+    |     +-- Chamber: "project-planning"
+    |           +-- Stratum: ...
     |
-    +-- Knowledge Graph
-          +-- Entity: "Docker" (tool)
-          +-- Entity: "PostgreSQL" (tool)
-          +-- Triple: "web-service" --uses--> "PostgreSQL"
+    +-- Cave Survey (Knowledge Graph)
+          +-- Deposit: "Docker" (tool)
+          +-- Deposit: "PostgreSQL" (tool)
+          +-- Passage: "web-service" --uses--> "PostgreSQL"
 ```
 
 **6 tables. 3 indexes. 1 FTS5 virtual table. That's it.**
@@ -69,12 +69,12 @@ Tested on a live multi-machine setup with real AI conversation histories:
 
 | Metric | Value |
 |--------|-------|
-| Sources ingested | Claude Code + Codex + OpenCode + 3 remote hosts |
-| Total sessions | 117+ (12 Claude, 61 Codex, 44 OpenCode) |
-| Total memory chunks (drawers) | **37,936** |
-| Embedding coverage | 73% (27,584 / 37,936) |
-| Wings (top-level groups) | 10 (local + remote machines) |
-| Database size | ~80 MB (with embeddings) |
+| Sources ingested | Claude Code + Codex + OpenCode |
+| Total sessions | 117+ (13 Claude, 61 Codex, 44 OpenCode) |
+| Total strata | **5,833** |
+| Embedding coverage | 100% (5,833 / 5,833) |
+| Layers | 3 (claude-176, codex-176, opencode-176) |
+| Database size | 33 MB (with embeddings) |
 | Embedding model | BAAI/bge-m3 (1024-dim, free on SiliconFlow) |
 | Embedding cost | **$0** (free tier) |
 
@@ -148,8 +148,8 @@ Then in any MCP-compatible client:
 
 ```
 > Search my memory for "deployment configuration"
-> Ingest my ChatGPT export into the palace
-> What entities are connected to "PostgreSQL"?
+> Ingest my ChatGPT export into the cavern
+> What deposits are connected to "PostgreSQL"?
 ```
 
 ---
@@ -158,18 +158,18 @@ Then in any MCP-compatible client:
 
 | Tool | Purpose |
 |------|---------|
-| `list_wings` | Browse top-level groupings |
-| `list_rooms` | Browse rooms in a wing |
-| `browse_room` | Paginated drawer contents |
+| `list_layers` | Browse top-level groupings |
+| `list_chambers` | Browse chambers in a layer |
+| `browse_chamber` | Paginated stratum contents |
 | `search` | Hybrid search: FTS5 keyword + embedding semantic |
-| `search_graph` | Query knowledge graph triples |
+| `survey` | Query cave survey passages (knowledge graph) |
 | `ingest_source` | Import a file (claude / chatgpt / slack / codex / text) |
 | `ingest_claude_project` | Bulk import Claude Code sessions |
 | `ingest_codex_sessions` | Bulk import Codex rollouts (turn-based, with tool call summaries) |
 | `ingest_opencode` | Import OpenCode (DeepSeek) SQLite database |
-| `add_entity` | Add knowledge graph entity |
-| `add_triple` | Add relationship triple |
-| `extract_knowledge` | Auto-extract entities from a drawer |
+| `add_deposit` | Add cave survey deposit (entity) |
+| `add_passage` | Add cave survey passage (relationship) |
+| `extract_survey` | Auto-extract deposits and passages from a stratum |
 
 ---
 
@@ -188,13 +188,13 @@ All sources are chunked into conversation-turn pairs (user + assistant), with se
 
 ---
 
-## Knowledge Graph
+## Cave Survey (Knowledge Graph)
 
-Dongtian automatically extracts entities and relationships from your conversations:
+Dongtian can extract deposits and passages from your conversations:
 
-**Entity types:** `person`, `project`, `concept`, `tool`
+**Deposit types:** `person`, `project`, `concept`, `tool`
 
-**Relationship predicates:**
+**Passage predicates:**
 - `uses` -- "Flask uses SQLite"
 - `deployed_on` -- "app deployed on production"
 - `depends_on` -- "project requires Redis"
@@ -203,7 +203,7 @@ Dongtian automatically extracts entities and relationships from your conversatio
 - `replaced` -- "switched from MySQL to PostgreSQL"
 - `is_a` -- "React is a framework"
 
-Entities and triples can also be added manually via MCP tools for high-confidence facts.
+Deposits and passages can also be added manually via MCP tools for high-confidence facts.
 
 ---
 
@@ -215,7 +215,7 @@ Dongtian offers three search modes:
 2. **`embedding`** -- Cosine similarity against stored vectors. Requires an embedding API.
 3. **`hybrid`** (default) -- Weighted combination: 40% BM25 + 60% cosine similarity.
 
-All modes support `wing` and `room` filters to narrow scope.
+All modes support `layer` and `chamber` filters to narrow scope.
 
 If no embedding API is configured, hybrid mode automatically falls back to keyword-only.
 
@@ -244,7 +244,7 @@ dongtian/
   config.py            # configuration (~40 lines)
   db.py                # SQLite schema + queries (~340 lines)
   embeddings.py        # OpenAI-compatible client (~70 lines)
-  graph.py             # entity extraction + KG (~130 lines)
+  graph.py             # deposit extraction + cave survey (~130 lines)
   ingest.py            # 6 source parsers (~620 lines)
   remote.py            # SSH remote sync (~200 lines)
   search.py            # hybrid search (~120 lines)
@@ -261,4 +261,4 @@ MIT
 
 ---
 
-*Named after the Daoist concept of Dongtian -- a grotto-heaven where a small space contains an entire world. Your AI conversations deserve a palace, not a landfill.*
+*Named after the Daoist concept of Dongtian -- a grotto-heaven where a small space contains an entire world. Your AI conversations deserve a cavern, not a landfill.*
