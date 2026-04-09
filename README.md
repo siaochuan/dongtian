@@ -42,10 +42,10 @@ Dongtian organizes memory using the palace metaphor, mapped to a simple relation
 ```
   Palace (SQLite DB)
     |
-    +-- Wing: "codex-project"        # top-level domain
-    |     +-- Room: "2026-03-19"     # session / topic
-    |     |     +-- Drawer: "User asked about factor pipeline..."
-    |     |     +-- Drawer: "Assistant explained the backtest..."
+    +-- Wing: "claude-local"           # top-level domain
+    |     +-- Room: "2026-03-19"       # session / topic
+    |     |     +-- Drawer: "User asked about deployment config..."
+    |     |     +-- Drawer: "Assistant explained the architecture..."
     |     +-- Room: "2026-04-01"
     |           +-- Drawer: ...
     |
@@ -55,8 +55,8 @@ Dongtian organizes memory using the palace metaphor, mapped to a simple relation
     |
     +-- Knowledge Graph
           +-- Entity: "Docker" (tool)
-          +-- Entity: "Server 176" (concept)
-          +-- Triple: "trading-system" --deployed_on--> "Server 176"
+          +-- Entity: "PostgreSQL" (tool)
+          +-- Triple: "web-service" --uses--> "PostgreSQL"
 ```
 
 **6 tables. 3 indexes. 1 FTS5 virtual table. That's it.**
@@ -82,10 +82,10 @@ Tested on a live multi-machine setup with real AI conversation histories:
 
 | Query | Top Hit | Score |
 |-------|---------|-------|
-| "期货 Tick 复权" | Futures tick adjust pipeline docs | 0.72 |
-| "订单流 微观结构" | Orderflow wiki analysis matrix | 0.69 |
+| "database migration rollback" | PostgreSQL migration debugging session | 0.72 |
+| "部署配置 Nginx" | Nginx reverse proxy setup discussion | 0.69 |
 | "SSH connection config" | SSH troubleshooting session | 0.67 |
-| "backtest factor strategy" | Factor pipeline architecture doc | 0.62 |
+| "React state management" | Architecture review session | 0.62 |
 
 Chinese queries work natively through the embedding path -- no special tokenizer needed.
 
@@ -102,7 +102,7 @@ pip install dongtian
 Or from source:
 
 ```bash
-git clone https://github.com/yourname/dongtian.git
+git clone https://github.com/siaochuan/dongtian.git
 cd dongtian
 pip install -e .
 ```
@@ -147,9 +147,9 @@ codex mcp add dongtian -- python -m dongtian
 Then in any MCP-compatible client:
 
 ```
-> Search my memory for "factor pipeline architecture"
+> Search my memory for "deployment configuration"
 > Ingest my ChatGPT export into the palace
-> What entities are connected to "Server 176"?
+> What entities are connected to "PostgreSQL"?
 ```
 
 ---
@@ -196,9 +196,9 @@ Dongtian automatically extracts entities and relationships from your conversatio
 
 **Relationship predicates:**
 - `uses` -- "Flask uses SQLite"
-- `deployed_on` -- "app deployed on Server 176"
+- `deployed_on` -- "app deployed on production"
 - `depends_on` -- "project requires Redis"
-- `maintains` -- "Alice maintains the pipeline"
+- `maintains` -- "team maintains the pipeline"
 - `connects_to` -- "service connects to database"
 - `replaced` -- "switched from MySQL to PostgreSQL"
 - `is_a` -- "React is a framework"
