@@ -1,4 +1,4 @@
-"""MCP Server for Dongtian - exposes 10 tools for Claude Code integration."""
+"""MCP Server for Dongtian - exposes tools for cave system integration."""
 
 import sqlite3
 
@@ -11,7 +11,7 @@ from .ingest import ingest_source as do_ingest, ingest_claude_project as do_inge
 from .graph import extract_and_store
 from .remote import sync_remote_host, sync_all_hosts, discover_remote_sessions
 
-mcp = FastMCP("dongtian", instructions="Dongtian: structured memory system for AI conversations")
+mcp = FastMCP("dongtian", instructions="Dongtian: cave system memory for AI conversations")
 
 _conn: sqlite3.Connection | None = None
 _config: dict | None = None
@@ -34,71 +34,71 @@ def _get_config() -> dict:
 # ── Browse tools ──
 
 @mcp.tool()
-def list_wings() -> list[dict]:
-    """List all wings (top-level groupings) with room counts."""
-    return dbmod.list_wings(_get_conn())
+def list_layers() -> list[dict]:
+    """List all layers (top-level groupings) with chamber counts."""
+    return dbmod.list_layers(_get_conn())
 
 
 @mcp.tool()
-def list_rooms(wing: str) -> list[dict]:
-    """List rooms in a wing with drawer counts.
+def list_chambers(layer: str) -> list[dict]:
+    """List chambers in a layer with stratum counts.
 
     Args:
-        wing: Name of the wing to list rooms for
+        layer: Name of the layer to list chambers for
     """
-    return dbmod.list_rooms(_get_conn(), wing)
+    return dbmod.list_chambers(_get_conn(), layer)
 
 
 @mcp.tool()
-def browse_room(wing: str, room: str, limit: int = 20, offset: int = 0) -> list[dict]:
-    """Browse drawer contents in a specific room with pagination.
+def browse_chamber(layer: str, chamber: str, limit: int = 20, offset: int = 0) -> list[dict]:
+    """Browse stratum contents in a specific chamber with pagination.
 
     Args:
-        wing: Wing name
-        room: Room name
+        layer: Layer name
+        chamber: Chamber name
         limit: Max results (default 20)
         offset: Skip first N results
     """
-    return dbmod.browse_drawers(_get_conn(), wing, room, limit, offset)
+    return dbmod.browse_strata(_get_conn(), layer, chamber, limit, offset)
 
 
 # ── Search tools ──
 
 @mcp.tool()
-def search(query: str, wing: str = "", room: str = "", mode: str = "hybrid", limit: int = 10) -> list[dict]:
+def search(query: str, layer: str = "", chamber: str = "", mode: str = "hybrid", limit: int = 10) -> list[dict]:
     """Search stored memories using keyword and/or semantic search.
 
     Args:
         query: Search query text
-        wing: Optional wing filter
-        room: Optional room filter
+        layer: Optional layer filter
+        chamber: Optional chamber filter
         mode: Search mode - "hybrid" (default), "keyword", or "embedding"
         limit: Max results (default 10)
     """
     return do_search(
         _get_conn(), query, _get_config(),
-        wing=wing or None, room=room or None,
+        layer=layer or None, chamber=chamber or None,
         mode=mode, limit=limit,
     )
 
 
 @mcp.tool()
-def search_graph(
-    entity: str = "", predicate: str = "", entity_type: str = "", active_only: bool = True
+def survey(
+    deposit: str = "", predicate: str = "", deposit_type: str = "", active_only: bool = True
 ) -> list[dict]:
-    """Query knowledge graph triples by entity, predicate, or type.
+    """Query cave survey (knowledge graph) passages by deposit, predicate, or type.
 
     Args:
-        entity: Entity name to search for (as subject or object)
+        deposit: Deposit name to search for (as subject or object)
         predicate: Relationship type filter (e.g. "uses", "deployed_on")
-        entity_type: Entity type filter ("person", "project", "concept", "tool")
-        active_only: Only return currently valid triples (default True)
+        deposit_type: Deposit type filter ("person", "project", "concept", "tool")
+        active_only: Only return currently valid passages (default True)
     """
-    return dbmod.query_triples(
+    return dbmod.query_passages(
         _get_conn(),
-        entity_name=entity or None,
+        deposit_name=deposit or None,
         predicate=predicate or None,
-        entity_type=entity_type or None,
+        deposit_type=deposit_type or None,
         active_only=active_only,
     )
 
@@ -106,120 +106,120 @@ def search_graph(
 # ── Ingestion tools ──
 
 @mcp.tool()
-def ingest_source(path: str, source_type: str, wing: str, room: str) -> dict:
-    """Ingest a file into the memory palace.
+def ingest_source(path: str, source_type: str, layer: str, chamber: str) -> dict:
+    """Ingest a file into the cavern.
 
     Args:
         path: File path to ingest
         source_type: Source format - "claude", "chatgpt", "slack", or "text"
-        wing: Wing name (auto-created if needed)
-        room: Room name (auto-created if needed)
+        layer: Layer name (auto-created if needed)
+        chamber: Chamber name (auto-created if needed)
     """
-    count = do_ingest(_get_conn(), _get_config(), path, source_type, wing, room)
-    return {"drawers_created": count, "wing": wing, "room": room}
+    count = do_ingest(_get_conn(), _get_config(), path, source_type, layer, chamber)
+    return {"strata_created": count, "layer": layer, "chamber": chamber}
 
 
 @mcp.tool()
-def ingest_claude_project(project_path: str, wing: str) -> dict:
+def ingest_claude_project(project_path: str, layer: str) -> dict:
     """Bulk-ingest all JSONL session files from a Claude Code project directory.
 
     Args:
         project_path: Path to Claude project dir (e.g. ~/.claude/projects/D--codex-prj)
-        wing: Wing name for all ingested sessions
+        layer: Layer name for all ingested sessions
     """
-    return do_ingest_project(_get_conn(), _get_config(), project_path, wing)
+    return do_ingest_project(_get_conn(), _get_config(), project_path, layer)
 
 
 @mcp.tool()
-def ingest_codex_sessions(sessions_dir: str, wing: str) -> dict:
+def ingest_codex_sessions(sessions_dir: str, layer: str) -> dict:
     """Bulk-ingest all Codex/OpenCode rollout JSONL files.
 
     Args:
         sessions_dir: Path to Codex sessions dir (e.g. ~/.codex/sessions)
-        wing: Wing name for all ingested sessions
+        layer: Layer name for all ingested sessions
     """
-    return do_ingest_codex(_get_conn(), _get_config(), sessions_dir, wing)
+    return do_ingest_codex(_get_conn(), _get_config(), sessions_dir, layer)
 
 
 @mcp.tool()
-def ingest_opencode(db_path: str, wing: str) -> dict:
+def ingest_opencode(db_path: str, layer: str) -> dict:
     """Ingest all sessions from an OpenCode (DeepSeek) SQLite database.
 
     Args:
         db_path: Path to opencode.db (e.g. ~/.local/share/opencode/opencode.db)
-        wing: Wing name for all ingested sessions
+        layer: Layer name for all ingested sessions
     """
-    return do_ingest_opencode(_get_conn(), _get_config(), db_path, wing)
+    return do_ingest_opencode(_get_conn(), _get_config(), db_path, layer)
 
 
-# ── Knowledge graph tools ──
+# ── Cave survey tools ──
 
 @mcp.tool()
-def add_entity(name: str, entity_type: str, aliases: list[str] | None = None) -> dict:
-    """Add or get an entity in the knowledge graph.
+def add_deposit(name: str, deposit_type: str, aliases: list[str] | None = None) -> dict:
+    """Add or get a deposit in the cave survey.
 
     Args:
-        name: Canonical entity name
-        entity_type: One of "person", "project", "concept", "tool"
+        name: Canonical deposit name
+        deposit_type: One of "person", "project", "concept", "tool"
         aliases: Optional list of alternate names
     """
-    eid = dbmod.get_or_create_entity(_get_conn(), name, entity_type, aliases)
-    return {"entity_id": eid, "name": name, "type": entity_type}
+    did = dbmod.get_or_create_deposit(_get_conn(), name, deposit_type, aliases)
+    return {"deposit_id": did, "name": name, "type": deposit_type}
 
 
 @mcp.tool()
-def add_triple(
+def add_passage(
     subject: str, predicate: str, object: str,
     confidence: float = 1.0, valid_from: str = "", valid_to: str = ""
 ) -> dict:
-    """Add a relationship triple to the knowledge graph. Creates entities if they don't exist.
+    """Add a passage (relationship) to the cave survey. Creates deposits if they don't exist.
 
     Args:
-        subject: Subject entity name
+        subject: Subject deposit name
         predicate: Relationship type (e.g. "uses", "deployed_on", "maintains")
-        object: Object entity name
+        object: Object deposit name
         confidence: Confidence score 0.0-1.0 (default 1.0)
         valid_from: ISO8601 start date (optional)
         valid_to: ISO8601 end date (optional, NULL = still valid)
     """
     conn = _get_conn()
-    subj_id = dbmod.get_or_create_entity(conn, subject, "concept")
-    obj_id = dbmod.get_or_create_entity(conn, object, "concept")
-    tid = dbmod.insert_triple(
+    subj_id = dbmod.get_or_create_deposit(conn, subject, "concept")
+    obj_id = dbmod.get_or_create_deposit(conn, object, "concept")
+    pid = dbmod.insert_passage(
         conn, subj_id, predicate, obj_id,
         confidence=confidence,
         valid_from=valid_from or None,
         valid_to=valid_to or None,
     )
-    return {"triple_id": tid, "subject": subject, "predicate": predicate, "object": object}
+    return {"passage_id": pid, "subject": subject, "predicate": predicate, "object": object}
 
 
 @mcp.tool()
-def extract_knowledge(drawer_id: int) -> dict:
-    """Run entity and relationship extraction on a specific drawer's content.
+def extract_survey(stratum_id: int) -> dict:
+    """Run deposit and passage extraction on a specific stratum's content.
 
     Args:
-        drawer_id: ID of the drawer to analyze
+        stratum_id: ID of the stratum to analyze
     """
-    return extract_and_store(_get_conn(), drawer_id)
+    return extract_and_store(_get_conn(), stratum_id)
 
 
 # ── Remote sync tools ──
 
 @mcp.tool()
-def sync_remote(host: str, wing: str = "") -> dict:
-    """Pull session data from a remote machine via SSH and ingest into the palace.
+def sync_remote(host: str, layer: str = "") -> dict:
+    """Pull session data from a remote machine via SSH and ingest into the cavern.
 
     Automatically discovers Claude Code and Codex sessions on the remote host,
-    rsync-pulls them, and ingests into a wing named after the host.
+    rsync-pulls them, and ingests into a layer named after the host.
 
     Args:
-        host: SSH host string (e.g. "konghm@192.168.91.212", "renchuan-01")
-        wing: Optional wing name override (default: auto from hostname)
+        host: SSH host string (e.g. "user@192.168.1.50", "dev-machine")
+        layer: Optional layer name override (default: auto from hostname)
     """
     return sync_remote_host(
         _get_conn(), _get_config(), host,
-        wing_name=wing or None,
+        layer_name=layer or None,
     )
 
 

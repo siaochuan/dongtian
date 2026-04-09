@@ -510,11 +510,11 @@ def ingest_codex_sessions(
     conn: sqlite3.Connection,
     config: dict,
     codex_sessions_dir: str,
-    wing_name: str,
+    layer_name: str,
 ) -> dict:
     """Bulk-ingest all Codex rollout JSONL files from ~/.codex/sessions/.
 
-    Uses session_index.jsonl for human-readable room names when available.
+    Uses session_index.jsonl for human-readable chamber names when available.
     """
     sessions_path = Path(codex_sessions_dir)
     jsonl_files = sorted(sessions_path.rglob("rollout-*.jsonl"))
@@ -526,18 +526,18 @@ def ingest_codex_sessions(
         sid = _extract_codex_session_id(str(jf))
         thread_name = session_index.get(sid, "")
         if thread_name:
-            # Use date + thread name slug as room
+            # Use date + thread name slug as chamber
             date_part = jf.stem.replace("rollout-", "")[:10]
             name_slug = thread_name.replace(" ", "-").replace("/", "-")[:30]
-            room_name = f"{date_part}_{name_slug}"
+            chamber_name = f"{date_part}_{name_slug}"
         else:
             name_parts = jf.stem.replace("rollout-", "")
-            room_name = name_parts[:10]
-        count = ingest_source(conn, config, str(jf), "codex", wing_name, room_name)
+            chamber_name = name_parts[:10]
+        count = ingest_source(conn, config, str(jf), "codex", layer_name, chamber_name)
         total += count
         if count > 0:
             sessions += 1
-    return {"sessions": sessions, "drawers": total}
+    return {"sessions": sessions, "strata": total}
 
 
 # ── OpenCode (DeepSeek) SQLite parser ──
@@ -635,15 +635,15 @@ def ingest_opencode_db(
     conn: sqlite3.Connection,
     config: dict,
     db_path: str,
-    wing_name: str,
+    layer_name: str,
 ) -> dict:
     """Ingest all sessions from an OpenCode SQLite database.
 
     Args:
-        conn: Dongtian palace connection
+        conn: Dongtian cavern connection
         config: Dongtian config
         db_path: Path to opencode.db
-        wing_name: Wing name for ingested data
+        layer_name: Layer name for ingested data
     """
     import sqlite3 as _sqlite3
 
@@ -658,24 +658,24 @@ def ingest_opencode_db(
     sess_count = 0
     for sess in sessions:
         title = (sess["title"] or sess["id"])[:40]
-        # Use title slug as room name
-        room_name = title.replace(" ", "-").replace("/", "-")[:30]
+        # Use title slug as chamber name
+        chamber_name = title.replace(" ", "-").replace("/", "-")[:30]
 
-        wing_id = dbmod.get_or_create_wing(conn, wing_name)
-        room_id = dbmod.get_or_create_room(conn, wing_id, room_name)
+        layer_id = dbmod.get_or_create_layer(conn, layer_name)
+        chamber_id = dbmod.get_or_create_chamber(conn, layer_id, chamber_name)
 
-        drawer_ids = []
+        stratum_ids = []
         for content, source_label, ts in _opencode_session_chunks(oc_conn, sess["id"], title):
-            did = dbmod.insert_drawer(conn, room_id, content, source_label, ts)
-            drawer_ids.append(did)
+            did = dbmod.insert_stratum(conn, chamber_id, content, source_label, ts)
+            stratum_ids.append(did)
 
-        _embed_drawers(conn, config, drawer_ids)
-        total += len(drawer_ids)
-        if drawer_ids:
+        _embed_strata(conn, config, stratum_ids)
+        total += len(stratum_ids)
+        if stratum_ids:
             sess_count += 1
 
     oc_conn.close()
-    return {"sessions": sess_count, "drawers": total}
+    return {"sessions": sess_count, "strata": total}
 
 
 def _opencode_session_chunks(
@@ -757,55 +757,55 @@ def ingest_source(
     config: dict,
     path: str,
     source_type: str,
-    wing_name: str,
-    room_name: str,
+    layer_name: str,
+    chamber_name: str,
 ) -> int:
     parser = PARSERS.get(source_type)
     if parser is None:
         raise ValueError(f"Unknown source_type: {source_type}. Use: {list(PARSERS.keys())}")
 
-    wing_id = dbmod.get_or_create_wing(conn, wing_name)
-    room_id = dbmod.get_or_create_room(conn, wing_id, room_name)
+    layer_id = dbmod.get_or_create_layer(conn, layer_name)
+    chamber_id = dbmod.get_or_create_chamber(conn, layer_id, chamber_name)
 
-    drawer_ids = []
+    stratum_ids = []
     for content, source_label, ts in parser(path):
-        did = dbmod.insert_drawer(conn, room_id, content, source_label, ts)
-        drawer_ids.append(did)
+        did = dbmod.insert_stratum(conn, chamber_id, content, source_label, ts)
+        stratum_ids.append(did)
 
     # generate embeddings if available
-    _embed_drawers(conn, config, drawer_ids)
-    return len(drawer_ids)
+    _embed_strata(conn, config, stratum_ids)
+    return len(stratum_ids)
 
 
 def ingest_claude_project(
     conn: sqlite3.Connection,
     config: dict,
     project_path: str,
-    wing_name: str,
+    layer_name: str,
 ) -> dict:
     p = Path(project_path)
     jsonl_files = sorted(p.glob("*.jsonl"))
     total = 0
     sessions = 0
     for jf in jsonl_files:
-        room_name = jf.stem[:12]
-        count = ingest_source(conn, config, str(jf), "claude", wing_name, room_name)
+        chamber_name = jf.stem[:12]
+        count = ingest_source(conn, config, str(jf), "claude", layer_name, chamber_name)
         total += count
         sessions += 1
-    return {"sessions": sessions, "drawers": total}
+    return {"sessions": sessions, "strata": total}
 
 
-def _embed_drawers(conn: sqlite3.Connection, config: dict, drawer_ids: list[int]) -> int:
+def _embed_strata(conn: sqlite3.Connection, config: dict, stratum_ids: list[int]) -> int:
     client = get_client(config)
-    if client is None or not drawer_ids:
+    if client is None or not stratum_ids:
         return 0
 
     batch_size = 20
     embedded = 0
-    for i in range(0, len(drawer_ids), batch_size):
-        batch_ids = drawer_ids[i:i + batch_size]
+    for i in range(0, len(stratum_ids), batch_size):
+        batch_ids = stratum_ids[i:i + batch_size]
         rows = conn.execute(
-            f"SELECT id, content FROM drawers WHERE id IN ({','.join('?' * len(batch_ids))})",
+            f"SELECT id, content FROM strata WHERE id IN ({','.join('?' * len(batch_ids))})",
             batch_ids,
         ).fetchall()
         if not rows:

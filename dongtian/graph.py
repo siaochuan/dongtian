@@ -1,4 +1,4 @@
-"""Knowledge graph: entity extraction and triple management."""
+"""Cave survey: deposit extraction and passage management."""
 
 import re
 import sqlite3
@@ -67,8 +67,8 @@ def extract_entities(text: str) -> list[dict]:
     return found
 
 
-def extract_triples(text: str) -> list[dict]:
-    """Extract relationship triples from text using regex patterns."""
+def extract_passages(text: str) -> list[dict]:
+    """Extract relationship passages from text using regex patterns."""
     found = []
     for pattern, predicate in RELATION_PATTERNS:
         matches = re.findall(pattern, text, re.IGNORECASE)
@@ -87,40 +87,40 @@ def extract_triples(text: str) -> list[dict]:
 
 def extract_and_store(
     conn: sqlite3.Connection,
-    drawer_id: int,
+    stratum_id: int,
     source_ts: Optional[str] = None,
 ) -> dict:
-    """Run extraction on a drawer and store results."""
-    row = conn.execute("SELECT content, source_ts FROM drawers WHERE id = ?", (drawer_id,)).fetchone()
+    """Run extraction on a stratum and store results."""
+    row = conn.execute("SELECT content, source_ts FROM strata WHERE id = ?", (stratum_id,)).fetchone()
     if not row:
-        return {"error": "Drawer not found"}
+        return {"error": "Stratum not found"}
 
     text = row["content"]
     ts = source_ts or row["source_ts"]
 
-    entities = extract_entities(text)
-    triples = extract_triples(text)
+    deposits = extract_entities(text)
+    passages = extract_passages(text)
 
-    entity_count = 0
-    for e in entities:
-        dbmod.get_or_create_entity(conn, e["name"], e["type"])
-        entity_count += 1
+    deposit_count = 0
+    for e in deposits:
+        dbmod.get_or_create_deposit(conn, e["name"], e["type"])
+        deposit_count += 1
 
-    triple_count = 0
-    for t in triples:
-        subj_type = _guess_type(t["subject"])
-        obj_type = _guess_type(t["object"])
-        subj_id = dbmod.get_or_create_entity(conn, t["subject"], subj_type)
-        obj_id = dbmod.get_or_create_entity(conn, t["object"], obj_type)
-        dbmod.insert_triple(
-            conn, subj_id, t["predicate"], obj_id,
-            confidence=t["confidence"],
+    passage_count = 0
+    for p in passages:
+        subj_type = _guess_type(p["subject"])
+        obj_type = _guess_type(p["object"])
+        subj_id = dbmod.get_or_create_deposit(conn, p["subject"], subj_type)
+        obj_id = dbmod.get_or_create_deposit(conn, p["object"], obj_type)
+        dbmod.insert_passage(
+            conn, subj_id, p["predicate"], obj_id,
+            confidence=p["confidence"],
             valid_from=ts,
-            source_drawer_id=drawer_id,
+            source_stratum_id=stratum_id,
         )
-        triple_count += 1
+        passage_count += 1
 
-    return {"entities_found": entity_count, "triples_found": triple_count}
+    return {"deposits_found": deposit_count, "passages_found": passage_count}
 
 
 def _guess_type(name: str) -> str:

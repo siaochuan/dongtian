@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 DEFAULT_CONFIG = {
-    "db_path": "~/.dongtian/palace.db",
+    "db_path": "~/.dongtian/cavern.db",
     "embedding_api_key": None,
     "embedding_base_url": "https://api.siliconflow.cn/v1",
     "embedding_model": "BAAI/bge-m3",
