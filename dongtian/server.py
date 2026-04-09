@@ -111,7 +111,7 @@ def ingest_source(path: str, source_type: str, layer: str, chamber: str) -> dict
 
     Args:
         path: File path to ingest
-        source_type: Source format - "claude", "chatgpt", "slack", or "text"
+        source_type: Source format - "claude", "codex", "chatgpt", "opencode", "slack", or "text"
         layer: Layer name (auto-created if needed)
         chamber: Chamber name (auto-created if needed)
     """
