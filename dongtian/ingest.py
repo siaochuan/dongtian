@@ -258,64 +258,252 @@ def parse_text(path: str) -> Generator[Chunk, None, None]:
 
 # ── Codex rollout JSONL parser ──
 
-def parse_codex_rollout(path: str) -> Generator[Chunk, None, None]:
-    """Parse Codex/OpenCode rollout JSONL files.
-
-    Format: {timestamp, type, payload} where type=response_item has
-    payload.role in (user, assistant, developer).
-    """
-    session_id = Path(path).stem.split("-")[-1][:8] if "-" in Path(path).stem else Path(path).stem[:8]
-    exchanges: list[tuple[str, str, str]] = []
-
-    with open(path, "r", encoding="utf-8") as f:
+def _load_codex_session_index() -> dict[str, str]:
+    """Load session_index.jsonl to map session IDs to thread names."""
+    idx_path = Path("~/.codex/session_index.jsonl").expanduser()
+    mapping: dict[str, str] = {}
+    if not idx_path.exists():
+        return mapping
+    with open(idx_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
                 continue
             try:
                 entry = json.loads(line)
+                sid = entry.get("id", "")
+                name = entry.get("thread_name", "")
+                if sid and name:
+                    mapping[sid] = name
+            except json.JSONDecodeError:
+                continue
+    return mapping
+
+
+def _extract_codex_session_id(path: str) -> str:
+    """Extract UUID session ID from rollout filename.
+
+    Filename format: rollout-2026-04-07T14-26-47-019d669f-44b2-7912-a4a1-b0121b869633.jsonl
+    The UUID is the last 5 hyphen-separated groups (36 chars).
+    """
+    stem = Path(path).stem
+    # Remove "rollout-" prefix, then extract trailing UUID
+    rest = stem.replace("rollout-", "")
+    # UUID is 36 chars: 8-4-4-4-12
+    if len(rest) >= 36:
+        candidate = rest[-36:]
+        if candidate.count("-") == 4:
+            return candidate
+    return rest[:8]
+
+
+def parse_codex_rollout(path: str) -> Generator[Chunk, None, None]:
+    """Parse Codex CLI rollout JSONL files with turn-based grouping.
+
+    Processes the full Codex session format (v0.105+):
+    - session_meta: session metadata (model, cwd, version)
+    - event_msg/user_message: actual user input
+    - event_msg/task_complete: turn summary with last_agent_message
+    - response_item/message: user/assistant messages
+    - response_item/function_call: tool invocations (summarized)
+    """
+    session_id = _extract_codex_session_id(path)
+    short_id = session_id[:8]
+
+    entries: list[dict] = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
             except json.JSONDecodeError:
                 continue
 
-            if entry.get("type") != "response_item":
-                continue
+    if not entries:
+        return
 
-            payload = entry.get("payload", {})
-            role = payload.get("role", "")
-            if role not in ("user", "assistant"):
-                continue
+    # Extract session metadata for source label
+    meta_cwd = ""
+    meta_model = ""
+    for e in entries:
+        if e.get("type") == "session_meta":
+            p = e.get("payload", {})
+            meta_cwd = p.get("cwd", "")
+            meta_model = p.get("model_provider", "")
+            break
 
-            ts = entry.get("timestamp", "")
-            content_blocks = payload.get("content", [])
-            texts = []
-            for block in content_blocks:
-                if isinstance(block, dict):
-                    btype = block.get("type", "")
-                    if btype in ("input_text", "output_text", "text"):
-                        texts.append(block.get("text", ""))
-                elif isinstance(block, str):
-                    texts.append(block)
-            text = "\n".join(texts).strip()
-            if text and len(text) > 20:
-                exchanges.append((role, text, ts))
+    # Group entries into turns: task_started -> ... -> task_complete
+    turns: list[dict] = []
+    current_turn: dict | None = None
 
-    # pair user+assistant turns
-    i = 0
-    while i < len(exchanges):
+    for e in entries:
+        etype = e.get("type", "")
+        payload = e.get("payload", {})
+        ts = e.get("timestamp", "")
+        ptype = payload.get("type", "") if isinstance(payload, dict) else ""
+
+        if etype == "event_msg" and ptype == "task_started":
+            current_turn = {
+                "ts": ts,
+                "user_msg": "",
+                "assistant_msg": "",
+                "tool_calls": [],
+                "model": "",
+            }
+            continue
+
+        if current_turn is None:
+            # Messages outside turns: handle response_item/message directly
+            if etype == "response_item" and ptype == "message":
+                role = payload.get("role", "")
+                text = _extract_codex_message_text(payload)
+                if role == "user" and text and not _is_codex_system_context(text):
+                    current_turn = {
+                        "ts": ts, "user_msg": text,
+                        "assistant_msg": "", "tool_calls": [], "model": "",
+                    }
+                elif role == "assistant" and text:
+                    if turns and not turns[-1].get("assistant_msg"):
+                        turns[-1]["assistant_msg"] = text
+                    else:
+                        turns.append({
+                            "ts": ts, "user_msg": "",
+                            "assistant_msg": text, "tool_calls": [], "model": "",
+                        })
+            continue
+
+        # Inside a turn: collect content
+        if etype == "event_msg":
+            if ptype == "user_message":
+                msg = payload.get("message", "")
+                if msg and not msg.startswith("Tip:") and not msg.startswith("⚠"):
+                    current_turn["user_msg"] = msg
+            elif ptype == "task_complete":
+                lam = payload.get("last_agent_message", "")
+                if lam:
+                    current_turn["assistant_msg"] = lam
+                turns.append(current_turn)
+                current_turn = None
+            elif ptype == "turn_context":
+                current_turn["model"] = payload.get("model", "")
+
+        elif etype == "response_item":
+            if ptype == "message":
+                role = payload.get("role", "")
+                text = _extract_codex_message_text(payload)
+                if role == "user" and text and not _is_codex_system_context(text):
+                    if not current_turn["user_msg"]:
+                        current_turn["user_msg"] = text
+                elif role == "assistant" and text:
+                    current_turn["assistant_msg"] = text
+            elif ptype == "function_call":
+                name = payload.get("name", "")
+                args = payload.get("arguments", "")
+                summary = _summarize_tool_call(name, args)
+                if summary:
+                    current_turn["tool_calls"].append(summary)
+            elif ptype == "custom_tool_call":
+                name = payload.get("name", "")
+                if name:
+                    current_turn["tool_calls"].append(name)
+
+    # Flush any incomplete turn
+    if current_turn and (current_turn["user_msg"] or current_turn["assistant_msg"]):
+        turns.append(current_turn)
+
+    # Build source label
+    source = f"codex:{short_id}"
+    if meta_model:
+        source = f"codex:{meta_model}:{short_id}"
+
+    # Yield chunks from turns
+    for turn in turns:
+        if not turn["user_msg"] and not turn["assistant_msg"]:
+            continue
         parts = []
-        ts = exchanges[i][2]
-        if exchanges[i][0] == "user":
-            parts.append(f"User: {exchanges[i][1]}")
-            i += 1
-            if i < len(exchanges) and exchanges[i][0] == "assistant":
-                parts.append(f"Assistant: {exchanges[i][1]}")
-                i += 1
-        else:
-            parts.append(f"Assistant: {exchanges[i][1]}")
-            i += 1
+        if turn["user_msg"]:
+            parts.append(f"User: {turn['user_msg']}")
+        if turn["tool_calls"]:
+            # Deduplicate consecutive identical tool calls
+            deduped = _dedup_tool_calls(turn["tool_calls"])
+            tools_summary = ", ".join(deduped[:10])
+            if len(deduped) > 10:
+                tools_summary += f" (+{len(deduped) - 10} more)"
+            parts.append(f"Tools: [{tools_summary}]")
+        if turn["assistant_msg"]:
+            parts.append(f"Assistant: {turn['assistant_msg']}")
         combined = "\n\n".join(parts)
         for chunk in _split_long(combined):
-            yield (chunk, f"codex:{session_id}", ts)
+            yield (chunk, source, turn["ts"])
+
+
+def _extract_codex_message_text(payload: dict) -> str:
+    """Extract text content from a Codex response_item/message payload."""
+    content = payload.get("content", [])
+    if isinstance(content, str):
+        return content.strip()
+    texts = []
+    for block in content:
+        if isinstance(block, dict):
+            btype = block.get("type", "")
+            if btype in ("input_text", "output_text", "text"):
+                texts.append(block.get("text", ""))
+        elif isinstance(block, str):
+            texts.append(block)
+    return "\n".join(texts).strip()
+
+
+def _is_codex_system_context(text: str) -> bool:
+    """Check if a user message is system/environment context, not real user input."""
+    prefixes = (
+        "<environment_context>", "<permissions", "<collaboration_mode>",
+        "# Collaboration Mode:", "Filesystem sandboxing",
+    )
+    return any(text.lstrip().startswith(p) for p in prefixes)
+
+
+def _summarize_tool_call(name: str, args_json: str) -> str:
+    """Produce a compact summary of a tool call."""
+    if not name:
+        return ""
+    if name == "exec_command":
+        try:
+            args = json.loads(args_json)
+            cmd = args.get("command", "")
+            if cmd:
+                # Truncate long commands
+                cmd_short = cmd.split("\n")[0][:80]
+                return f"exec({cmd_short})"
+        except (json.JSONDecodeError, TypeError):
+            pass
+        return "exec_command"
+    if name == "apply_patch":
+        return "apply_patch"
+    if name == "update_plan":
+        return ""  # Noise, skip
+    return name
+
+
+def _dedup_tool_calls(calls: list[str]) -> list[str]:
+    """Collapse consecutive identical tool call summaries."""
+    if not calls:
+        return []
+    result = []
+    prev = None
+    count = 0
+    for c in calls:
+        if c == prev:
+            count += 1
+        else:
+            if prev is not None:
+                result.append(f"{prev} x{count}" if count > 1 else prev)
+            prev = c
+            count = 1
+    if prev is not None:
+        result.append(f"{prev} x{count}" if count > 1 else prev)
+    return result
 
 
 def ingest_codex_sessions(
@@ -324,15 +512,27 @@ def ingest_codex_sessions(
     codex_sessions_dir: str,
     wing_name: str,
 ) -> dict:
-    """Bulk-ingest all Codex rollout JSONL files from ~/.codex/sessions/."""
+    """Bulk-ingest all Codex rollout JSONL files from ~/.codex/sessions/.
+
+    Uses session_index.jsonl for human-readable room names when available.
+    """
     sessions_path = Path(codex_sessions_dir)
     jsonl_files = sorted(sessions_path.rglob("rollout-*.jsonl"))
+    session_index = _load_codex_session_index()
+
     total = 0
     sessions = 0
     for jf in jsonl_files:
-        # room name from date: rollout-2026-03-19T16-39-18-... -> 2026-03-19
-        name_parts = jf.stem.replace("rollout-", "")
-        room_name = name_parts[:10]  # "2026-03-19"
+        sid = _extract_codex_session_id(str(jf))
+        thread_name = session_index.get(sid, "")
+        if thread_name:
+            # Use date + thread name slug as room
+            date_part = jf.stem.replace("rollout-", "")[:10]
+            name_slug = thread_name.replace(" ", "-").replace("/", "-")[:30]
+            room_name = f"{date_part}_{name_slug}"
+        else:
+            name_parts = jf.stem.replace("rollout-", "")
+            room_name = name_parts[:10]
         count = ingest_source(conn, config, str(jf), "codex", wing_name, room_name)
         total += count
         if count > 0:
