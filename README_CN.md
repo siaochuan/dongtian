@@ -1,6 +1,6 @@
 # 洞天 (Dongtian)
 
-**一个 SQLite 文件装下你所有的 AI 对话记忆。不需要 ChromaDB，不需要大模型，只有 ~1,200 行 Python。**
+**跨 AI 平台的统一记忆层。一个 SQLite 文件索引 Claude Code、Codex、ChatGPT、OpenCode、Slack 的所有对话——支持 BM25 + 语义混合搜索。**
 
 > "洞天"源自道家概念——壶中别有天地，一方小小的洞府容纳了整个世界。你和 AI 的对话也值得这样一座记忆宫殿：紧凑、本地、随时可检索。
 
@@ -8,19 +8,28 @@
 
 ## 为什么做洞天？
 
-现有的 AI 记忆方案要么太重（ChromaDB + 本地 embedding 模型 + 数千行代码），要么太贵（每次检索都调 LLM）。
+你同时使用多种 AI 工具——Claude Code 做架构、Codex 做原型、ChatGPT 做调研、DeepSeek 做调试。每个工具产生的有价值上下文在会话结束后就消失了。**目前没有工具能让你跨平台搜索所有对话。**
 
-**洞天把它精简到极致：** 同样的宫殿隐喻、同样的知识图谱，但只用 SQLite + FTS5 全文检索，可选的 embedding 走任何 OpenAI 兼容 API，代码量一次性读完。
+- **mem0**（52K stars）是强大的记忆平台，但依赖云端（Qdrant/pgvector），且不摄入对话历史——它存储 LLM 提取的事实
+- **claude-mem**（46K stars）自动捕获 Claude Code 会话，但仅支持 Claude，且需要 ChromaDB
+- **Engram**（2.3K stars）是最接近的轻量竞品（SQLite + FTS5 + MCP），但没有 embedding 搜索和多源摄入
+- **MCP 官方 memory server** 用 JSON 文件存知识图谱三元组——没有全文搜索，没有语义搜索
 
-| | 传统方案 | 洞天 |
-|---|----------|------|
-| **向量存储** | ChromaDB（独立进程） | SQLite BLOB（零运维） |
-| **Embedding** | 本地 GPU/CPU 模型 | 任意 OpenAI 兼容 API（SiliconFlow 免费） |
-| **依赖** | ChromaDB + transformers + Llama | `httpx` + `mcp`（2 个包） |
-| **代码量** | 5,000+ 行 | **~1,200 行** |
-| **数据源** | Claude, ChatGPT | Claude, ChatGPT, Slack, **Codex/OpenCode(DeepSeek)**, 纯文本 |
-| **中文支持** | 仅 embedding | FTS5 关键词 + embedding 双路径 |
-| **存储** | 多个文件/进程 | **单个 SQLite 文件** |
+**洞天填补了这个空白**：零依赖的 MCP 服务器，从 6 种来源摄入对话到单个 SQLite 文件，支持 FTS5 + embedding 混合搜索。~1,800 行 Python，2 个 pip 依赖。
+
+### 竞品对比
+
+| | 洞天 | mem0 | claude-mem | Engram | MCP 官方 |
+|---|------|------|------------|--------|----------|
+| **存储** | SQLite（单文件） | 云端 / Qdrant / pgvector | SQLite + ChromaDB | SQLite | JSON 文件 |
+| **搜索** | FTS5 BM25 + embedding 混合 | 语义 + 图谱 | RAG | 仅 FTS5 | 仅关键词 |
+| **多源摄入** | Claude, Codex, ChatGPT, OpenCode, Slack, 文本 | 无（API 驱动） | 仅 Claude | 无 | 无 |
+| **知识图谱** | 有 | 无 | 无 | 无 | 有 |
+| **SSH 远程同步** | 有 | 无 | 无 | 无 | 无 |
+| **依赖** | `httpx` + `mcp` | Qdrant + LLM API | ChromaDB + transformers | 无（Go 二进制） | 无 |
+| **MCP 服务器** | 原生 | 需 wrapper | 无（hooks） | 原生 | 原生 |
+| **中文支持** | FTS5 + embedding 双路径 | 仅 embedding | 仅 embedding | 无 | 无 |
+| **费用** | $0（SiliconFlow 免费） | 免费→$249/月 | 免费 | 免费 | 免费 |
 
 ---
 
@@ -31,24 +40,24 @@
 ```
   宫殿 (SQLite 数据库)
     │
-    ├── 翼 (Wing): "claude-176"         # 顶层分组（按来源/机器）
-    │     ├── 室 (Room): "2026-04-01"   # 会话/主题
-    │     │     ├── 抽屉 (Drawer): "用户问了因子流水线架构..."
-    │     │     └── 抽屉 (Drawer): "助手解释了回测框架..."
+    ├── 翼 (Wing): "claude-local"         # 顶层分组（按来源/机器）
+    │     ├── 室 (Room): "2026-04-01"    # 会话/主题
+    │     │     ├── 抽屉 (Drawer): "用户问了部署配置..."
+    │     │     └── 抽屉 (Drawer): "助手解释了架构设计..."
     │     └── 室 (Room): "2026-04-07"
     │           └── 抽屉 (Drawer): ...
     │
-    ├── 翼 (Wing): "deepseek-176"       # DeepSeek/OpenCode 会话
-    │     └── 室 (Room): "MST构建讨论"
+    ├── 翼 (Wing): "codex-local"         # Codex 会话
+    │     └── 室 (Room): "API重构讨论"
     │           └── 抽屉 (Drawer): ...
     │
-    ├── 翼 (Wing): "remote-212"         # SSH 远程同步的数据
+    ├── 翼 (Wing): "remote-dev"          # SSH 远程同步的数据
     │     └── ...
     │
     └── 知识图谱
           ├── 实体: "Docker" (工具)
-          ├── 实体: "Ray Cluster" (概念)
-          └── 三元组: "交易系统" --部署在--> "生产服务器"
+          ├── 实体: "PostgreSQL" (工具)
+          └── 三元组: "Web 服务" --使用--> "PostgreSQL"
 ```
 
 **6 张表，3 个索引，1 个 FTS5 虚拟表，就这些。**
@@ -149,7 +158,7 @@ pip install -e .
 
 ### 作为 MCP 服务器使用
 
-添加到 Claude Code 或 OpenHarness 配置：
+**Claude Code** — 添加到 `.mcp.json` 或 `~/.claude/settings.json`：
 
 ```json
 {
@@ -162,10 +171,16 @@ pip install -e .
 }
 ```
 
-然后在对话中：
+**Codex CLI** — 命令行注册：
+
+```bash
+codex mcp add dongtian -- python -m dongtian
+```
+
+然后在任意 MCP 兼容客户端中：
 
 ```
-> 搜索记忆中关于"因子回测"的内容
+> 搜索记忆中关于"部署配置"的内容
 > 把 ChatGPT 导出导入到宫殿
 > 同步远程服务器的会话数据
 ```
@@ -243,13 +258,17 @@ pip install -e .
 
 ## 实测数据
 
+在多机实际环境中测试：
+
 | 指标 | 数值 |
 |------|------|
-| 导入会话数 | 91+ sessions |
-| 总记忆片段 | **16,589 drawers** |
+| 摄入来源 | Claude Code + Codex + OpenCode + 3 台远程主机 |
+| 总会话数 | 117+（12 Claude, 61 Codex, 44 OpenCode） |
+| 总记忆片段 | **37,936 drawers** |
+| Embedding 覆盖率 | 73%（27,584 / 37,936） |
+| 翼 (Wings) | 10（本机 + 远程机器） |
 | 数据库大小 | ~80 MB（含 embedding） |
-| Embedding 速度 | 174 chunks/sec |
-| 翼 (Wings) | 5（本机 Claude + Codex + DeepSeek + 远程 212） |
+| Embedding 模型 | BAAI/bge-m3（1024 维，SiliconFlow 免费） |
 | Embedding 成本 | **$0**（SiliconFlow 免费额度） |
 
 ---
