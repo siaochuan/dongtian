@@ -2,30 +2,36 @@
 
 [中文文档](README_CN.md)
 
-**A single SQLite file holds your entire AI memory. No ChromaDB. No heavy models. ~1,200 lines of Python.**
+**Unified memory layer for AI agents. One SQLite file indexes conversations across Claude Code, Codex, ChatGPT, OpenCode, and Slack — with hybrid BM25 + semantic search.**
 
-> *Dongtian* is a Daoist concept meaning "grotto-heaven" -- a small sacred space that contains an entire world within. Your conversations deserve the same: a compact local database that holds everything you've ever discussed with AI, structured and instantly searchable.
+> *Dongtian* (洞天) is a Daoist concept meaning "grotto-heaven" -- a small sacred space that contains an entire world within. Your conversations deserve the same: a compact local database that holds everything you've ever discussed with AI, structured and instantly searchable.
 
 ---
 
 ## Why Dongtian?
 
-We loved the idea behind [MemPalace](https://github.com/milla-jovovich/mempalace) -- turning AI conversations into a structured, searchable memory system. But we found it too heavy: ChromaDB as a separate process, sentence-transformers for local embeddings, complex AAAK compression, and thousands of lines of code.
+You use multiple AI tools — Claude Code for architecture, Codex for prototyping, ChatGPT for research, DeepSeek for debugging. Each generates valuable context that dies when the session ends. **No existing tool lets you search across all of them.**
 
-**Dongtian strips it down to the essentials.** Same palace metaphor. Same knowledge graph. But built on pure SQLite with FTS5 full-text search, optional embeddings via any OpenAI-compatible API, and a codebase small enough to read in one sitting.
+- **mem0** (52K stars) is a powerful memory platform, but it's cloud-heavy (Qdrant/pgvector) and doesn't ingest conversation histories — it stores facts extracted by LLMs
+- **claude-mem** (46K stars) auto-captures Claude Code sessions, but it's Claude-only and uses ChromaDB
+- **Engram** (2.3K stars) is the closest lightweight competitor (SQLite + FTS5 + MCP), but it has no embedding search and no multi-source ingestion
+- **Official MCP memory server** stores knowledge graph triples in a JSON file — no full-text search, no semantic search
 
-| | MemPalace | Dongtian |
-|---|-----------|----------|
-| **Vector store** | ChromaDB (separate process) | SQLite BLOB (zero ops) |
-| **Embedding** | sentence-transformers (local GPU/CPU) | Any OpenAI-compatible API (SiliconFlow free tier) |
-| **Dependencies** | ChromaDB + sentence-transformers + Llama | `httpx` + `mcp` (2 packages) |
-| **Codebase** | ~5,000+ lines | **~1,200 lines** |
-| **Install** | pip install + ChromaDB setup + model download | `pip install dongtian` |
-| **Knowledge graph** | Yes | Yes |
-| **Data sources** | Claude, ChatGPT, Slack | Claude, ChatGPT, Slack, **Codex/OpenCode**, text |
-| **Chinese support** | Embedding only | FTS5 keyword + embedding dual-path |
-| **MCP tools** | 19 | 11 (focused) |
-| **Storage** | ChromaDB collection + SQLite KG | **Single SQLite file** |
+**Dongtian fills the gap**: a zero-dependency MCP server that ingests conversations from 6 sources into a single SQLite file, with hybrid FTS5 + embedding search. ~1,800 lines of Python, 2 pip dependencies.
+
+### Competitive Comparison
+
+| | Dongtian | mem0 | claude-mem | Engram | MCP official |
+|---|----------|------|------------|--------|--------------|
+| **Storage** | SQLite (single file) | Cloud / Qdrant / pgvector | SQLite + ChromaDB | SQLite | JSON file |
+| **Search** | FTS5 BM25 + embedding hybrid | Semantic + graph | RAG | FTS5 only | Keyword only |
+| **Multi-source ingestion** | Claude, Codex, ChatGPT, OpenCode, Slack, text | No (API-driven) | Claude only | No | No |
+| **Knowledge graph** | Yes | No | No | No | Yes |
+| **SSH remote sync** | Yes | No | No | No | No |
+| **Dependencies** | `httpx` + `mcp` | Qdrant + LLM API | ChromaDB + transformers | None (Go binary) | None |
+| **MCP server** | Native | Via wrapper | No (hooks) | Native | Native |
+| **Chinese support** | FTS5 + embedding | Embedding only | Embedding only | No | No |
+| **Cost** | $0 (SiliconFlow free tier) | Free→$249/mo | Free | Free | Free |
 
 ---
 
@@ -59,27 +65,27 @@ Dongtian organizes memory using the palace metaphor, mapped to a simple relation
 
 ## Real-World Numbers
 
-Tested on a live setup across two machines with actual AI conversation histories:
+Tested on a live multi-machine setup with real AI conversation histories:
 
 | Metric | Value |
 |--------|-------|
-| Total conversations ingested | 91 sessions |
-| Total memory chunks (drawers) | **16,456** |
-| Database size | 82.6 MB (with embeddings) |
-| Embedding generation speed | 174 chunks/sec |
-| 3,623 chunks embedded in | 21 seconds |
+| Sources ingested | Claude Code + Codex + OpenCode + 3 remote hosts |
+| Total sessions | 117+ (12 Claude, 61 Codex, 44 OpenCode) |
+| Total memory chunks (drawers) | **37,936** |
+| Embedding coverage | 73% (27,584 / 37,936) |
+| Wings (top-level groups) | 10 (local + remote machines) |
+| Database size | ~80 MB (with embeddings) |
 | Embedding model | BAAI/bge-m3 (1024-dim, free on SiliconFlow) |
 | Embedding cost | **$0** (free tier) |
 
 ### Search Quality (Hybrid Mode)
 
-| Query | Top Hit | Embedding Score |
-|-------|---------|-----------------|
-| "labubu price monitor" | Labubu price tracking dashboard | 0.65 |
-| "Iran USDT exchange rate" | USDT premium analysis report | 0.77 |
-| "backtest factor strategy" | Factor pipeline architecture doc | 0.62 |
+| Query | Top Hit | Score |
+|-------|---------|-------|
+| "期货 Tick 复权" | Futures tick adjust pipeline docs | 0.72 |
+| "订单流 微观结构" | Orderflow wiki analysis matrix | 0.69 |
 | "SSH connection config" | SSH troubleshooting session | 0.67 |
-| "state management bottleneck" | Architecture review session | 0.64 |
+| "backtest factor strategy" | Factor pipeline architecture doc | 0.62 |
 
 Chinese queries work natively through the embedding path -- no special tokenizer needed.
 
@@ -119,7 +125,7 @@ Create `~/.dongtian/config.json` for embedding support:
 
 ### Use as MCP Server
 
-Add to your Claude Code config (`.mcp.json` or `~/.claude/settings.json`):
+**Claude Code** — add to `.mcp.json` or `~/.claude/settings.json`:
 
 ```json
 {
@@ -132,7 +138,13 @@ Add to your Claude Code config (`.mcp.json` or `~/.claude/settings.json`):
 }
 ```
 
-Then in Claude Code:
+**Codex CLI** — register via command:
+
+```bash
+codex mcp add dongtian -- python -m dongtian
+```
+
+Then in any MCP-compatible client:
 
 ```
 > Search my memory for "factor pipeline architecture"
@@ -153,7 +165,8 @@ Then in Claude Code:
 | `search_graph` | Query knowledge graph triples |
 | `ingest_source` | Import a file (claude / chatgpt / slack / codex / text) |
 | `ingest_claude_project` | Bulk import Claude Code sessions |
-| `ingest_codex_sessions` | Bulk import Codex/OpenCode rollouts |
+| `ingest_codex_sessions` | Bulk import Codex rollouts (turn-based, with tool call summaries) |
+| `ingest_opencode` | Import OpenCode (DeepSeek) SQLite database |
 | `add_entity` | Add knowledge graph entity |
 | `add_triple` | Add relationship triple |
 | `extract_knowledge` | Auto-extract entities from a drawer |
@@ -165,7 +178,8 @@ Then in Claude Code:
 | Source | Format | What it parses |
 |--------|--------|----------------|
 | **Claude Code** | JSONL | `~/.claude/projects/` session histories |
-| **Codex / OpenCode** | JSONL | `~/.codex/sessions/` rollout files |
+| **Codex** | JSONL | `~/.codex/sessions/` rollouts (turn-based parsing with tool summaries) |
+| **OpenCode (DeepSeek)** | SQLite | `~/.local/share/opencode/opencode.db` |
 | **ChatGPT** | JSON | OpenAI conversation export (`conversations.json`) |
 | **Slack** | JSON | Channel export (directory or single file) |
 | **Plain text** | .txt / .md | Split on headings or paragraphs |
@@ -217,7 +231,7 @@ If no embedding API is configured, hybrid mode automatically falls back to keywo
 | Embedding (SiliconFlow bge-m3) | Free (free tier) |
 | **Total** | **$0/year** |
 
-Compare: MemPalace estimates ~$10/year with Haiku reranking, or $507/year for LLM-summary approaches.
+Compare: mem0 Pro costs $249/month. MemPalace estimates ~$10/year with Haiku reranking.
 
 ---
 
@@ -231,12 +245,13 @@ dongtian/
   db.py                # SQLite schema + queries (~340 lines)
   embeddings.py        # OpenAI-compatible client (~70 lines)
   graph.py             # entity extraction + KG (~130 lines)
-  ingest.py            # 5 source parsers (~420 lines)
+  ingest.py            # 6 source parsers (~620 lines)
+  remote.py            # SSH remote sync (~200 lines)
   search.py            # hybrid search (~120 lines)
-  server.py            # MCP server, 11 tools (~200 lines)
+  server.py            # MCP server, 15 tools (~250 lines)
 ```
 
-**Total: ~1,200 lines of Python. 2 dependencies. 1 SQLite file.**
+**Total: ~1,800 lines of Python. 2 dependencies. 1 SQLite file.**
 
 ---
 
