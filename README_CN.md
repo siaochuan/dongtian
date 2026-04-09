@@ -2,7 +2,7 @@
 
 **跨 AI 平台的统一记忆层。一个 SQLite 文件索引 Claude Code、Codex、ChatGPT、OpenCode、Slack 的所有对话——支持 BM25 + 语义混合搜索。**
 
-> "洞天"源自道家概念——壶中别有天地，一方小小的洞府容纳了整个世界。你和 AI 的对话也值得这样一座记忆宫殿：紧凑、本地、随时可检索。
+> "洞天"源自道家概念——壶中别有天地，一方小小的洞府容纳了整个世界。你和 AI 的对话也值得这样一座溶洞：紧凑、本地、随时可检索。
 
 ---
 
@@ -24,7 +24,7 @@
 | **存储** | SQLite（单文件） | 云端 / Qdrant / pgvector | SQLite + ChromaDB | SQLite | JSON 文件 |
 | **搜索** | FTS5 BM25 + embedding 混合 | 语义 + 图谱 | RAG | 仅 FTS5 | 仅关键词 |
 | **多源摄入** | Claude, Codex, ChatGPT, OpenCode, Slack, 文本 | 无（API 驱动） | 仅 Claude | 无 | 无 |
-| **知识图谱** | 有 | 无 | 无 | 无 | 有 |
+| **洞穴勘测（KG）** | 有 | 无 | 无 | 无 | 有 |
 | **SSH 远程同步** | 有 | 无 | 无 | 无 | 无 |
 | **依赖** | `httpx` + `mcp` | Qdrant + LLM API | ChromaDB + transformers | 无（Go 二进制） | 无 |
 | **MCP 服务器** | 原生 | 需 wrapper | 无（hooks） | 原生 | 原生 |
@@ -35,29 +35,29 @@
 
 ## 架构
 
-洞天用"宫殿"隐喻组织记忆，映射到简洁的关系模型：
+洞天用**洞穴系统**隐喻组织记忆，映射到简洁的关系模型：
 
 ```
-  宫殿 (SQLite 数据库)
+  溶洞 (Cavern, SQLite 数据库)
     │
-    ├── 翼 (Wing): "claude-local"         # 顶层分组（按来源/机器）
-    │     ├── 室 (Room): "2026-04-01"    # 会话/主题
-    │     │     ├── 抽屉 (Drawer): "用户问了部署配置..."
-    │     │     └── 抽屉 (Drawer): "助手解释了架构设计..."
-    │     └── 室 (Room): "2026-04-07"
-    │           └── 抽屉 (Drawer): ...
+    ├── 层 (Layer): "claude-local"         # 顶层分组（按来源/机器）
+    │     ├── 洞室 (Chamber): "2026-04-01" # 会话/主题
+    │     │     ├── 地层 (Stratum): "用户问了部署配置..."
+    │     │     └── 地层 (Stratum): "助手解释了架构设计..."
+    │     └── 洞室 (Chamber): "2026-04-07"
+    │           └── 地层 (Stratum): ...
     │
-    ├── 翼 (Wing): "codex-local"         # Codex 会话
-    │     └── 室 (Room): "API重构讨论"
-    │           └── 抽屉 (Drawer): ...
+    ├── 层 (Layer): "codex-local"          # Codex 会话
+    │     └── 洞室 (Chamber): "API重构讨论"
+    │           └── 地层 (Stratum): ...
     │
-    ├── 翼 (Wing): "remote-dev"          # SSH 远程同步的数据
+    ├── 层 (Layer): "remote-dev"           # SSH 远程同步的数据
     │     └── ...
     │
-    └── 知识图谱
-          ├── 实体: "Docker" (工具)
-          ├── 实体: "PostgreSQL" (工具)
-          └── 三元组: "Web 服务" --使用--> "PostgreSQL"
+    └── 洞穴勘测 (Cave Survey)
+          ├── 沉积 (Deposit): "Docker" (工具)
+          ├── 沉积 (Deposit): "PostgreSQL" (工具)
+          └── 通道 (Passage): "Web 服务" --使用--> "PostgreSQL"
 ```
 
 **6 张表，3 个索引，1 个 FTS5 虚拟表，就这些。**
@@ -68,9 +68,9 @@
 
 ### 多模型记忆共享
 
-不同 AI 工具产生的会话存入同一个数据库，跨模型检索：
+不同 AI 工具产生的会话存入同一个溶洞，跨模型检索：
 
-- **Claude Code** 的深度分析 → 用 MiniMax 也能搜到
+- **Claude Code** 的深度分析 → 用其他模型也能搜到
 - **DeepSeek/OpenCode** 的调试记录 → 用 Claude 也能检索
 - **ChatGPT** 的导出 → 统一入库
 
@@ -80,11 +80,10 @@
 
 自动从其他机器拉取会话数据：
 
-```python
-# 配置远程主机
+```json
 "remote_hosts": [
-    {"host": "user@10.0.1.50", "wing": "remote-server-a"},
-    {"host": "dev-machine", "wing": "remote-dev"}
+    {"host": "user@10.0.1.50", "layer": "remote-server-a"},
+    {"host": "dev-machine", "layer": "remote-dev"}
 ]
 ```
 
@@ -104,12 +103,12 @@
 
 中文搜索原生支持，FTS5 + embedding 双路径。
 
-### 知识图谱
+### 洞穴勘测（知识图谱）
 
-自动从对话中提取实体和关系：
+从对话中提取沉积（实体）和通道（关系）：
 
-- **实体类型：** 人物、项目、概念、工具
-- **关系类型：** 使用(uses)、部署于(deployed_on)、依赖(depends_on)、维护(maintains)、连接(connects_to)、替代(replaced)、属于(is_a)
+- **沉积类型：** 人物、项目、概念、工具
+- **通道类型：** 使用(uses)、部署于(deployed_on)、依赖(depends_on)、维护(maintains)、连接(connects_to)、替代(replaced)、属于(is_a)
 
 ---
 
@@ -150,8 +149,8 @@ pip install -e .
 ```json
 {
   "remote_hosts": [
-    {"host": "user@10.0.1.50", "wing": "remote-server-a"},
-    {"host": "dev-machine", "wing": "remote-dev"}
+    {"host": "user@10.0.1.50", "layer": "remote-server-a"},
+    {"host": "dev-machine", "layer": "remote-dev"}
   ]
 }
 ```
@@ -181,7 +180,7 @@ codex mcp add dongtian -- python -m dongtian
 
 ```
 > 搜索记忆中关于"部署配置"的内容
-> 把 ChatGPT 导出导入到宫殿
+> 把 ChatGPT 导出导入到溶洞
 > 同步远程服务器的会话数据
 ```
 
@@ -193,16 +192,16 @@ codex mcp add dongtian -- python -m dongtian
 
 | 工具 | 功能 |
 |------|------|
-| `list_wings` | 列出所有翼（顶层分组） |
-| `list_rooms` | 列出翼下的所有室 |
-| `browse_room` | 分页浏览抽屉内容 |
+| `list_layers` | 列出所有层（顶层分组） |
+| `list_chambers` | 列出层下的所有洞室 |
+| `browse_chamber` | 分页浏览地层内容 |
 
 ### 搜索
 
 | 工具 | 功能 |
 |------|------|
 | `search` | 混合搜索：FTS5 关键词 + embedding 语义 |
-| `search_graph` | 查询知识图谱三元组 |
+| `survey` | 查询洞穴勘测通道（知识图谱） |
 
 ### 导入
 
@@ -210,7 +209,7 @@ codex mcp add dongtian -- python -m dongtian
 |------|------|
 | `ingest_source` | 导入文件（claude / chatgpt / slack / codex / opencode / text） |
 | `ingest_claude_project` | 批量导入 Claude Code 会话 |
-| `ingest_codex_sessions` | 批量导入 Codex/OpenCode 会话 |
+| `ingest_codex_sessions` | 批量导入 Codex 会话（按轮次解析，含工具调用摘要） |
 | `ingest_opencode` | 导入 OpenCode (DeepSeek) SQLite 数据库 |
 
 ### 远程同步
@@ -221,13 +220,13 @@ codex mcp add dongtian -- python -m dongtian
 | `sync_all_remotes` | 批量同步所有配置的远程主机 |
 | `discover_remote` | 探测远程主机有哪些会话数据（不拉取） |
 
-### 知识图谱
+### 洞穴勘测
 
 | 工具 | 功能 |
 |------|------|
-| `add_entity` | 添加知识图谱实体 |
-| `add_triple` | 添加关系三元组 |
-| `extract_knowledge` | 从抽屉内容自动提取实体和关系 |
+| `add_deposit` | 添加沉积（实体） |
+| `add_passage` | 添加通道（关系） |
+| `extract_survey` | 从地层内容自动提取沉积和通道 |
 
 ---
 
@@ -236,7 +235,7 @@ codex mcp add dongtian -- python -m dongtian
 | 来源 | 格式 | 解析内容 |
 |------|------|----------|
 | **Claude Code** | JSONL | `~/.claude/projects/` 会话历史 |
-| **Codex / OpenCode** | JSONL | `~/.codex/sessions/` rollout 文件 |
+| **Codex** | JSONL | `~/.codex/sessions/` rollout 文件（按轮次解析，含工具摘要） |
 | **OpenCode (DeepSeek)** | SQLite | `~/.local/share/opencode/opencode.db` |
 | **ChatGPT** | JSON | OpenAI 导出文件 (`conversations.json`) |
 | **Slack** | JSON | 频道导出（目录或单个文件） |
@@ -246,28 +245,16 @@ codex mcp add dongtian -- python -m dongtian
 
 ---
 
-## 与 OpenHarness 集成
-
-洞天可以作为 [OpenHarness](https://github.com/HKUDS/OpenHarness) 的记忆层：
-
-1. **MCP 工具** — 15 个工具直接可用，agent 可以搜索、导入、同步
-2. **System Prompt 注入** — 每次对话自动检索相关历史记忆注入上下文（[PR #72](https://github.com/HKUDS/OpenHarness/pull/72)）
-3. **本地个性化** — 配合自动规则提取，从历史中学习用户的本地环境（[PR #65](https://github.com/HKUDS/OpenHarness/pull/65)）
-
----
-
 ## 实测数据
-
-在多机实际环境中测试：
 
 | 指标 | 数值 |
 |------|------|
-| 摄入来源 | Claude Code + Codex + OpenCode + 3 台远程主机 |
-| 总会话数 | 117+（12 Claude, 61 Codex, 44 OpenCode） |
-| 总记忆片段 | **37,936 drawers** |
-| Embedding 覆盖率 | 73%（27,584 / 37,936） |
-| 翼 (Wings) | 10（本机 + 远程机器） |
-| 数据库大小 | ~80 MB（含 embedding） |
+| 摄入来源 | Claude Code + Codex + OpenCode |
+| 总会话数 | 117+（13 Claude, 61 Codex, 44 OpenCode） |
+| 总地层 | **5,833 strata** |
+| Embedding 覆盖率 | 100%（5,833 / 5,833） |
+| 层 (Layers) | 3（claude-176, codex-176, opencode-176） |
+| 数据库大小 | 33 MB（含 embedding） |
 | Embedding 模型 | BAAI/bge-m3（1024 维，SiliconFlow 免费） |
 | Embedding 成本 | **$0**（SiliconFlow 免费额度） |
 
@@ -282,7 +269,7 @@ dongtian/
   config.py            # 配置加载（~40 行）
   db.py                # SQLite 模式 + 查询（~340 行）
   embeddings.py        # OpenAI 兼容客户端（~70 行）
-  graph.py             # 实体提取 + 知识图谱（~130 行）
+  graph.py             # 沉积提取 + 洞穴勘测（~130 行）
   ingest.py            # 6 种源解析器（~620 行）
   remote.py            # SSH 远程同步（~200 行）
   search.py            # 混合搜索（~120 行）
@@ -311,4 +298,4 @@ MIT
 
 ---
 
-*以道家洞天福地之名——一方小天地，容纳无限可能。你的 AI 对话值得一座宫殿，而不是一个垃圾场。*
+*以道家洞天福地之名——一方小天地，容纳无限可能。你的 AI 对话值得一座溶洞，而不是一个垃圾场。*
