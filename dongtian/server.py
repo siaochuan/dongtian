@@ -1,6 +1,10 @@
 """MCP Server for Dongtian - exposes tools for cave system integration."""
 
 import sqlite3
+import threading
+import traceback
+from datetime import datetime
+from pathlib import Path
 
 from mcp.server.fastmcp import FastMCP
 
@@ -10,17 +14,143 @@ from .search import search as do_search
 from .ingest import ingest_source as do_ingest, ingest_claude_project as do_ingest_project, ingest_codex_sessions as do_ingest_codex, ingest_opencode_db as do_ingest_opencode
 from .graph import extract_and_store
 from .remote import sync_remote_host, sync_all_hosts, discover_remote_sessions
+from .hook_candidates import run_hook_candidate_update, default_chamber_for_today
 
 mcp = FastMCP("dongtian", instructions="Dongtian: cave system memory for AI conversations")
 
 _conn: sqlite3.Connection | None = None
 _config: dict | None = None
+_daily_update_lock = threading.Lock()
+_daily_update_state: dict = {
+    "last_trigger_date": "",
+    "running": False,
+    "last_started_at": "",
+    "last_finished_at": "",
+    "last_status": "never",
+    "last_error": "",
+    "last_output_dir": "",
+    "last_result": {},
+}
+
+
+def _now_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _today_str() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _state_snapshot() -> dict:
+    with _daily_update_lock:
+        return dict(_daily_update_state)
+
+
+def _ingest_hook_artifacts(
+    conn: sqlite3.Connection,
+    config: dict,
+    update_result: dict,
+    *,
+    layer: str = "",
+    chamber: str = "",
+) -> dict:
+    layer_name = layer.strip() if layer else str(config.get("hook_candidate_layer", "dongtian-system"))
+    chamber_name = chamber.strip() if chamber else default_chamber_for_today(config)
+    files = [
+        update_result.get("report_path", ""),
+        update_result.get("candidate_rules_path", ""),
+        update_result.get("meta_path", ""),
+    ]
+    strata_created = 0
+    ingested_files: list[str] = []
+    for file_path in files:
+        if not file_path:
+            continue
+        path = Path(file_path).expanduser()
+        if not path.exists():
+            continue
+        count = do_ingest(conn, config, str(path), "text", layer_name, chamber_name)
+        strata_created += int(count)
+        ingested_files.append(str(path))
+    return {
+        "layer": layer_name,
+        "chamber": chamber_name,
+        "strata_created": strata_created,
+        "files": ingested_files,
+    }
+
+
+def _run_daily_hook_update_worker(day_key: str) -> None:
+    try:
+        config = load_config()
+        result = run_hook_candidate_update(config, since_days=None, emit_timestamped=True)
+        ingest_result: dict | None = None
+        if bool(config.get("hook_candidate_auto_ingest", True)):
+            conn = dbmod.init_db(config["db_path"])
+            try:
+                chamber_prefix = str(config.get("hook_candidate_chamber_prefix", "hook_candidates")).strip() or "hook_candidates"
+                ingest_result = _ingest_hook_artifacts(
+                    conn,
+                    config,
+                    result,
+                    layer=str(config.get("hook_candidate_layer", "dongtian-system")),
+                    chamber=f"{day_key}_{chamber_prefix}",
+                )
+            finally:
+                conn.close()
+        with _daily_update_lock:
+            _daily_update_state["running"] = False
+            _daily_update_state["last_finished_at"] = _now_str()
+            _daily_update_state["last_status"] = "ok"
+            _daily_update_state["last_error"] = ""
+            _daily_update_state["last_output_dir"] = str(result.get("latest_dir", ""))
+            _daily_update_state["last_result"] = {
+                "update": result,
+                "ingest": ingest_result or {},
+            }
+    except Exception:
+        with _daily_update_lock:
+            _daily_update_state["running"] = False
+            _daily_update_state["last_finished_at"] = _now_str()
+            _daily_update_state["last_status"] = "error"
+            _daily_update_state["last_error"] = traceback.format_exc(limit=3)
+
+
+def _maybe_trigger_daily_async_update(config: dict | None = None, *, force: bool = False) -> dict:
+    cfg = config or load_config()
+    if not bool(cfg.get("hook_candidate_auto_update", True)):
+        return {"triggered": False, "reason": "disabled", "state": _state_snapshot()}
+
+    day_key = _today_str()
+    with _daily_update_lock:
+        if not force:
+            if _daily_update_state.get("running"):
+                return {"triggered": False, "reason": "running", "state": dict(_daily_update_state)}
+            if _daily_update_state.get("last_trigger_date") == day_key:
+                return {"triggered": False, "reason": "already_triggered_today", "state": dict(_daily_update_state)}
+
+        _daily_update_state["last_trigger_date"] = day_key
+        _daily_update_state["running"] = True
+        _daily_update_state["last_started_at"] = _now_str()
+        _daily_update_state["last_status"] = "running"
+        _daily_update_state["last_error"] = ""
+
+        worker = threading.Thread(
+            target=_run_daily_hook_update_worker,
+            args=(day_key,),
+            daemon=True,
+            name="dongtian-hook-daily-update",
+        )
+        worker.start()
+        return {"triggered": True, "reason": "started", "state": dict(_daily_update_state)}
 
 
 def _get_conn() -> sqlite3.Connection:
     global _conn, _config
-    if _conn is None:
+    if _config is None:
         _config = load_config()
+    _maybe_trigger_daily_async_update(_config)
+    if _conn is None:
         _conn = dbmod.init_db(_config["db_path"])
     return _conn
 
@@ -239,4 +369,56 @@ def discover_remote(host: str) -> dict:
     Args:
         host: SSH host string
     """
+    _maybe_trigger_daily_async_update(_get_config())
     return discover_remote_sessions(host)
+
+
+# ── Hook candidate tools ──
+
+@mcp.tool()
+def mine_hook_candidates(
+    since_days: float = 0.0,
+    layer: str = "",
+    chamber: str = "",
+    auto_ingest: bool = True,
+    emit_timestamped: bool = True,
+) -> dict:
+    """Mine hook candidate rules from OpenHarness sessions and optionally ingest report artifacts.
+
+    Args:
+        since_days: Lookback window in days (<=0 means use config default)
+        layer: Optional ingest layer override
+        chamber: Optional ingest chamber override
+        auto_ingest: Ingest generated report/candidate/meta files into Dongtian
+        emit_timestamped: Also write a timestamped snapshot directory
+    """
+    config = _get_config()
+    lookback = since_days if since_days > 0 else None
+    result = run_hook_candidate_update(config, since_days=lookback, emit_timestamped=emit_timestamped)
+    ingest_result = {}
+    if auto_ingest:
+        ingest_result = _ingest_hook_artifacts(
+            _get_conn(),
+            config,
+            result,
+            layer=layer,
+            chamber=chamber,
+        )
+    return {
+        "update": result,
+        "ingest": ingest_result,
+    }
+
+
+@mcp.tool()
+def hook_update_status(force_trigger: bool = False) -> dict:
+    """Get async hook-update status and optionally force-trigger background update.
+
+    Args:
+        force_trigger: When true, trigger async update immediately regardless of day key
+    """
+    trigger = _maybe_trigger_daily_async_update(_get_config(), force=force_trigger)
+    return {
+        "trigger": trigger,
+        "status": _state_snapshot(),
+    }

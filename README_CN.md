@@ -54,6 +54,13 @@ pip install -e .
   "embedding_api_key": "YOUR_KEY",
   "embedding_base_url": "https://api.siliconflow.cn/v1",
   "embedding_model": "BAAI/bge-m3",
+  "hook_candidate_auto_update": true,
+  "hook_candidate_auto_ingest": true,
+  "hook_candidate_since_days": 14,
+  "hook_candidate_output_dir": "~/.dongtian/hook_candidates",
+  "hook_candidate_hook_file": "~/.openharness-w8/hooks/strategy_route_env_guard.py",
+  "hook_candidate_layer": "dongtian-system",
+  "hook_candidate_chamber_prefix": "hook_candidates",
   "remote_hosts": [
     {"host": "dev-machine", "layer": "remote-dev"}
   ]
@@ -62,6 +69,7 @@ pip install -e .
 
 - Embedding 是可选项；不配置时默认使用 FTS5 关键词检索。
 - `remote_hosts` 中 `layer` 与 `wing` 两个字段都支持（作用相同：指定同步进来的 layer 名称）。
+- hook 候选规则配置是可选项；开启后可自动挖掘 OpenHarness 的拦截历史并落盘/入库。
 
 ### 作为 MCP Server 使用
 
@@ -105,6 +113,8 @@ codex mcp add dongtian -- python -m dongtian
 | `add_passage` | 添加通道（关系） |
 | `survey` | 查询通道（知识图谱） |
 | `extract_survey` | 从某条地层内容中提取沉积/通道 |
+| `mine_hook_candidates` | 从 OpenHarness 会话挖掘 hook 候选规则 |
+| `hook_update_status` | 查看/触发每日异步 hook 更新状态 |
 
 ---
 
@@ -120,6 +130,21 @@ codex mcp add dongtian -- python -m dongtian
 | **纯文本** | .txt / .md | 按标题或段落分割 |
 
 所有来源会被切分为对话轮次，再进一步切成地层分块存储。
+
+---
+
+## 每日异步 Hook 更新
+
+当 `hook_candidate_auto_update=true` 时，洞天会在**每天第一次 MCP 工具调用**时触发后台异步更新。
+
+行为：
+- 非阻塞异步执行（工具调用立即返回，不等待更新完成）
+- 产物写入 `hook_candidate_output_dir/latest`（可选额外时间戳快照）
+- `hook_candidate_auto_ingest=true` 时自动将报告产物写回洞天
+
+手动控制：
+- 调用 `hook_update_status(force_trigger=true)` 可强制触发一次异步刷新
+- 调用 `mine_hook_candidates(...)` 可前台手动执行并按需入库
 
 ---
 
