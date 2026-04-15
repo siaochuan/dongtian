@@ -56,6 +56,13 @@ Create `~/.dongtian/config.json`:
   "embedding_api_key": "YOUR_KEY",
   "embedding_base_url": "https://api.siliconflow.cn/v1",
   "embedding_model": "BAAI/bge-m3",
+  "hook_candidate_auto_update": true,
+  "hook_candidate_auto_ingest": true,
+  "hook_candidate_since_days": 14,
+  "hook_candidate_output_dir": "~/.dongtian/hook_candidates",
+  "hook_candidate_hook_file": "~/.openharness-w8/hooks/strategy_route_env_guard.py",
+  "hook_candidate_layer": "dongtian-system",
+  "hook_candidate_chamber_prefix": "hook_candidates",
   "remote_hosts": [
     {"host": "dev-machine", "layer": "remote-dev"}
   ]
@@ -64,6 +71,7 @@ Create `~/.dongtian/config.json`:
 
 - Embeddings are optional. If not configured, Dongtian uses keyword search (FTS5).
 - For `remote_hosts`, `layer` and `wing` are both accepted as the layer name override.
+- Hook candidate fields are optional; when enabled, Dongtian can mine OpenHarness hook-block history and ingest daily reports.
 
 ### Use as MCP Server
 
@@ -107,6 +115,8 @@ codex mcp add dongtian -- python -m dongtian
 | `add_passage` | Add a passage (relationship) |
 | `survey` | Query passages (knowledge graph) |
 | `extract_survey` | Extract deposits/passages from a stratum |
+| `mine_hook_candidates` | Mine hook-rule candidates from OpenHarness sessions |
+| `hook_update_status` | Inspect/trigger daily async hook-update state |
 
 ---
 
@@ -122,6 +132,21 @@ codex mcp add dongtian -- python -m dongtian
 | **Plain text** | .txt / .md | Split on headings or paragraphs |
 
 All sources are chunked into conversation turns and then into strata.
+
+---
+
+## Daily Async Hook Update
+
+When `hook_candidate_auto_update=true`, Dongtian triggers a background hook-candidate update on the **first MCP tool call each day**.
+
+Behavior:
+- non-blocking async execution (tool calls continue immediately)
+- writes artifacts under `hook_candidate_output_dir/latest` (+ optional timestamped snapshot)
+- optionally ingests report artifacts into Dongtian when `hook_candidate_auto_ingest=true`
+
+Manual controls:
+- call `hook_update_status(force_trigger=true)` to force an async refresh
+- call `mine_hook_candidates(...)` to run a foreground/manual refresh and optionally ingest artifacts
 
 ---
 
